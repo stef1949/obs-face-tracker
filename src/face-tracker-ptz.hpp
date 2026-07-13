@@ -31,6 +31,7 @@ struct face_tracker_ptz
 	f3 e_deadband, e_nonlinear; // deadband and nonlinear amount for error input
 	f3 filter_int;
 	f3 filter_lpf;
+	bool settled[3];
 	float f_att_int;
 	int u[3];
 	float u_linear[3];

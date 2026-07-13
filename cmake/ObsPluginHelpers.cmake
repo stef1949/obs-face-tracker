@@ -35,7 +35,7 @@ endif()
 
 if(NOT QT_VERSION)
 	set(QT_VERSION
-		"5"
+		"6"
 		CACHE STRING "OBS Qt version [5, 6]" FORCE)
 	set_property(CACHE QT_VERSION PROPERTY STRINGS 5 6)
 endif()
@@ -289,7 +289,7 @@ else()
 			COMPONENT obs_rundir
 			EXCLUDE_FROM_ALL)
 
-		if(OS_WINDOWS)
+		if(MSVC)
 			install(
 				FILES $<TARGET_PDB_FILE:${target}>
 				CONFIGURATIONS "RelWithDebInfo" "Debug"

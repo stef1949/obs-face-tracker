@@ -1,6 +1,7 @@
 #pragma once
 #include <obs-module.h>
 #include <util/threading.h>
+#include <memory>
 #include <vector>
 #include <dlib/array2d/array2d_kernel.h>
 #include "plugin-macros.generated.h"
@@ -13,7 +14,7 @@ public:
 	~texture_object();
 
 	void set_texture_obsframe(const struct obs_source_frame *frame, int scale);
-	bool get_dlib_rgb_image(dlib::matrix<dlib::rgb_pixel> &img) const;
+	std::shared_ptr<const dlib::matrix<dlib::rgb_pixel>> get_dlib_rgb_image() const;
 
 public:
 	int tick;

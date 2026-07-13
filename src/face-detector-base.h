@@ -1,6 +1,7 @@
 #pragma once
 #include <obs-module.h>
 #include <util/threading.h>
+#include <atomic>
 #include <vector>
 #include <memory>
 #include "plugin-macros.generated.h"
@@ -10,8 +11,8 @@ class face_detector_base {
 	pthread_t thread;
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
-	bool running;
-	volatile bool request_stop;
+	std::atomic_bool running;
+	std::atomic_bool request_stop;
 	void *leak_test;
 
 	static void *thread_routine(void *);
@@ -26,7 +27,7 @@ public:
 	int unlock() { return pthread_mutex_unlock(&mutex); }
 	int signal() { return pthread_cond_signal(&cond); }
 
-	virtual void set_texture(std::shared_ptr<class texture_object> &, int crop_l, int crop_r, int crop_t,
+	virtual void set_texture(const std::shared_ptr<class texture_object> &, int crop_l, int crop_r, int crop_t,
 				 int crop_b) = 0;
 	virtual void get_faces(std::vector<struct rect_s> &) = 0;
 

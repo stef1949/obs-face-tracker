@@ -10,6 +10,17 @@
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
+OBS_MODULE_AUTHOR(PLUGIN_AUTHOR)
+
+const char *obs_module_name(void)
+{
+	return "Face Tracker";
+}
+
+const char *obs_module_description(void)
+{
+	return "Face-aware automatic framing and PTZ control for OBS Studio";
+}
 
 void register_face_tracker_filter(bool hide_filter, bool hide_source);
 void register_face_tracker_ptz(bool hide_ptz);

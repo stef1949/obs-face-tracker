@@ -1,6 +1,7 @@
 #pragma once
 #include <obs-module.h>
 #include <util/threading.h>
+#include <atomic>
 #include <vector>
 #include "plugin-macros.generated.h"
 #include "face-detector-base.h"
@@ -9,10 +10,10 @@ class face_tracker_base {
 	pthread_t thread;
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
-	bool running;
-	volatile bool stop_requested;
-	volatile bool stopped;
-	volatile bool suspend_requested;
+	std::atomic_bool running;
+	std::atomic_bool stop_requested;
+	std::atomic_bool stopped;
+	std::atomic_bool suspend_requested;
 	void *leak_test;
 
 	static void *thread_routine(void *);
@@ -27,7 +28,7 @@ public:
 	int unlock() { return pthread_mutex_unlock(&mutex); }
 	int signal() { return pthread_cond_signal(&cond); }
 
-	virtual void set_texture(std::shared_ptr<texture_object> &) = 0;
+	virtual void set_texture(const std::shared_ptr<texture_object> &) = 0;
 	virtual void set_position(const rect_s &rect) = 0;
 	virtual void set_upsize_info(const rectf_s &upsize) = 0;
 	virtual void set_landmark_detection(const char *data_file_path) = 0;

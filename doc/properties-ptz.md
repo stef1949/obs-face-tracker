@@ -28,6 +28,30 @@ If you want to save only contol parameters (`Tracking response`), enable only th
 
 ## Face detection options
 
+### YuNet detector
+
+YuNet-enabled builds provide a lightweight ONNX face detector intended for
+efficient CPU inference. `YuNet confidence threshold` controls the minimum
+detection score; raising it reduces false positives. `YuNet overlap threshold`
+controls non-maximum suppression; lower values remove overlapping detections
+more aggressively. `YuNet maximum input size` limits the inference canvas long
+edge; 320 is the CPU-efficient default, while larger values improve small-face
+detection at additional cost.
+
+### SCRFD detector
+
+SCRFD-2.5G improves difficult and small-face detection. `SCRFD confidence
+threshold` controls the minimum accepted score and `SCRFD overlap threshold`
+controls non-maximum suppression. `SCRFD input size` selects the square
+inference canvas: 640 prioritizes accuracy and 320 prioritizes speed. Enable
+`Use CUDA for SCRFD` to use the selected NVIDIA GPU. If the CUDA provider cannot
+start, the detector logs the reason and falls back to CPU inference.
+
+### CUDA GPU device
+
+CUDA-enabled builds run the dlib CNN detector or SCRFD detector on the selected
+NVIDIA GPU. HOG detection and correlation tracking continue to run on the CPU.
+
 ### Left, right, top, bottom
 These properties upsize (or downsize) the recognized face by multiple of the width or height.
 
@@ -49,6 +73,26 @@ The unit is pixel before scaling the image.
 The properties won't affect tracking.
 If the face is once detected and moved out from the cropped region,
 the tracking will still continue.
+
+### Target selection
+
+Selects which face controls the camera when several faces are visible. `Keep
+current subject` follows the face nearest the previous target and falls back to
+the largest face. The other policies always select the largest face, the face
+closest to the frame center, or the first detected face.
+
+### Detection intervals
+
+`Detection interval while tracking` controls how often the detector corrects
+an active tracker. `Detection interval while searching` is used when no face is
+tracked and should normally be shorter. `Keep lost subject for` preserves the
+previous target briefly so that a momentary occlusion does not immediately
+switch to another person.
+
+`Tracking update interval` limits frame conversion and correlation-tracker
+updates. The default 50 ms is 20 updates per second. Increase it to reduce CPU
+use, or lower it for faster motion response; 16 ms is approximately 60 updates
+per second.
 
 ### Landmark detection
 Specify dataset for face landmark detection and enable the checkbox
@@ -119,6 +163,11 @@ These parameters make dead bands and nonlinear bands for the error signal that g
 The unit is a percentage of the average of source width and height.
 If the error signal is within the dead band, error signal is forced to zero to avoid small move to be tracked.
 The nonlinear band makes smooth connection from the dead band to the linear range.
+
+The default X/Y dead band is 1.5% and uses hysteresis: after the subject settles,
+the camera remains stopped until the error clears the nonlinear band. Residual
+integral control is cleared while settled, preventing alternating low-speed PTZ
+commands caused by detector noise.
 
 The properties will be saved to and recalled from presets.
 
