@@ -1,6 +1,7 @@
 #include <obs-module.h>
 #include <util/platform.h>
 #include <util/threading.h>
+#include <string>
 #include "plugin-macros.generated.h"
 #include "face-detector-base.h"
 
@@ -12,8 +13,11 @@ class face_detector_dlib_cnn : public face_detector_base {
 public:
 	face_detector_dlib_cnn();
 	virtual ~face_detector_dlib_cnn();
-	void set_texture(std::shared_ptr<texture_object> &, int crop_l, int crop_r, int crop_t, int crop_b) override;
+	void set_texture(const std::shared_ptr<texture_object> &, int crop_l, int crop_r, int crop_t,
+			 int crop_b) override;
 	void get_faces(std::vector<struct rect_s> &) override;
 
 	void set_model(const char *filename);
+	void set_gpu_device(int device);
+	static std::vector<std::string> get_gpu_device_names();
 };

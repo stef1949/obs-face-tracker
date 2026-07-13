@@ -22,6 +22,7 @@ void FTDock::closeEvent(QCloseEvent *event)
 
 // accessed only from UI thread
 static std::vector<FTDock *> *docks;
+static QAction *tools_action;
 
 static std::string generate_unique_name()
 {
@@ -51,8 +52,10 @@ void ft_dock_add(const char *name, obs_data_t *props, bool show)
 	dock->load_properties(props);
 
 	std::string id = "ft." + dock->name;
-	if (!obs_frontend_add_dock_by_id(id.c_str(), dock->name.c_str(), static_cast<QWidget *>(dock)))
+	if (!obs_frontend_add_dock_by_id(id.c_str(), dock->name.c_str(), static_cast<QWidget *>(dock))) {
+		delete dock;
 		return;
+	}
 
 	if (docks)
 		docks->push_back(dock);
@@ -584,25 +587,37 @@ static void save_load_ft_docks(obs_data_t *save_data, bool saving, void *)
 
 void ft_docks_init()
 {
+	if (docks)
+		return;
 	docks = new std::vector<FTDock *>;
 	obs_frontend_add_save_callback(save_load_ft_docks, NULL);
 
-	QAction *action = static_cast<QAction *>(
+	tools_action = static_cast<QAction *>(
 		obs_frontend_add_tools_menu_qaction(obs_module_text("New Face Tracker Dock...")));
-	blog(LOG_INFO, "ft_docks_init: Adding face tracker dock menu action=%p", action);
+	blog(LOG_INFO, "ft_docks_init: Adding face tracker dock menu action=%p", tools_action);
 	auto cb = [] {
 		obs_data_t *props = obs_data_create();
 		FTDock::default_properties(props);
 		ft_dock_add(NULL, props, true);
 		obs_data_release(props);
 	};
-	QAction::connect(action, &QAction::triggered, cb);
+	QAction::connect(tools_action, &QAction::triggered, cb);
 }
 
 void ft_docks_release()
 {
+	obs_frontend_remove_save_callback(save_load_ft_docks, NULL);
+	if (docks) {
+		while (!docks->empty())
+			delete docks->back();
+	}
 	delete docks;
 	docks = NULL;
+	if (tools_action) {
+		tools_action->disconnect();
+		tools_action->deleteLater();
+		tools_action = NULL;
+	}
 }
 
 void FTDock::default_properties(obs_data_t *) {}

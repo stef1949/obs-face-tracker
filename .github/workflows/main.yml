@@ -23,8 +23,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        obs: [30]
-        ubuntu: ['ubuntu-22.04']
+        include:
+          - obs: 30
+            ubuntu: ubuntu-22.04
+          - obs: 31
+            ubuntu: ubuntu-24.04
+          - obs: 32
+            ubuntu: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -73,6 +78,7 @@ jobs:
             ${{ steps.obsdeps.outputs.PLUGIN_CMAKE_OPTIONS }}
           cd build
           make -j4
+          ctest --output-on-failure
           make package
           echo "FILE_NAME=$(find $PWD -name '*.deb' | head -n 1)" >> $GITHUB_ENV
       - name: Upload build artifact
@@ -92,6 +98,33 @@ jobs:
           fi
           ls /usr/share/obs/obs-plugins/${PLUGIN_NAME}/
 
+  linux_sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Download OBS 32 development environment
+        id: obsdeps
+        uses: norihiro/obs-studio-devel-action@v2
+        with:
+          obs: 32
+          verbose: true
+      - name: Build with sanitizers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt install -y libopenblas-dev libopenblas0
+          export OPENBLAS_HOME=/lib/x86_64-linux-gnu/
+          cmake -S . -B build-sanitized \
+            -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+            -D ENABLE_SANITIZERS=ON \
+            -D BUILD_TESTING=ON \
+            ${{ steps.obsdeps.outputs.PLUGIN_CMAKE_OPTIONS }}
+          cmake --build build-sanitized -j4
+          ctest --test-dir build-sanitized --output-on-failure
+
   macos_build:
     runs-on: ${{ matrix.macos }}
     strategy:
@@ -100,8 +133,20 @@ jobs:
         include:
           - obs: 30
             arch: x86_64
-            macos: macos-13 # Intel x86_64
+            macos: macos-15-intel # Intel x86_64
           - obs: 30
+            arch: arm64
+            macos: macos-14 # Apple arm64
+          - obs: 31
+            arch: x86_64
+            macos: macos-15-intel # Intel x86_64
+          - obs: 31
+            arch: arm64
+            macos: macos-14 # Apple arm64
+          - obs: 32
+            arch: x86_64
+            macos: macos-15-intel # Intel x86_64
+          - obs: 32
             arch: arm64
             macos: macos-14 # Apple arm64
     defaults:
@@ -187,15 +232,7 @@ jobs:
       - name: Download dlib-models
         run: |
           set -ex
-          mkdir data/dlib_hog_model
-          curl -LO https://github.com/norihiro/obs-face-tracker/releases/download/0.7.0-hogdata/frontal_face_detector.dat.bz2
-          bunzip2 < frontal_face_detector.dat.bz2 > data/dlib_hog_model/frontal_face_detector.dat
-          git clone --depth 1 https://github.com/davisking/dlib-models
-          mkdir data/{dlib_cnn_model,dlib_face_landmark_model}
-          bunzip2 < dlib-models/mmod_human_face_detector.dat.bz2 > data/dlib_cnn_model/mmod_human_face_detector.dat
-          bunzip2 < dlib-models/shape_predictor_5_face_landmarks.dat.bz2 > data/dlib_face_landmark_model/shape_predictor_5_face_landmarks.dat
-          cp dlib/LICENSE.txt data/LICENSE-dlib
-          cp dlib-models/LICENSE data/LICENSE-dlib-models
+          DESTDIR='./' ci/download-dlib-models.sh
 
       - name: Build plugin
         run: |
@@ -214,6 +251,7 @@ jobs:
             -D PKG_SUFFIX=$PKG_SUFFIX \
             ${{ steps.obsdeps.outputs.PLUGIN_CMAKE_OPTIONS }}
           cmake --build build --config RelWithDebInfo
+          ctest --test-dir build -C RelWithDebInfo --output-on-failure
 
       - name: Prepare package
         run: |
@@ -292,11 +330,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        obs: [30]
+        obs: [30, 31, 32]
         arch: [x64]
     env:
       visualStudio: 'Visual Studio 17 2022'
       Configuration: 'RelWithDebInfo'
+      WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
+      WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
     defaults:
       run:
         shell: pwsh
@@ -315,15 +355,7 @@ jobs:
         shell: bash
         run: |
           set -ex
-          mkdir data/dlib_hog_model
-          curl -LO https://github.com/norihiro/obs-face-tracker/releases/download/0.7.0-hogdata/frontal_face_detector.dat.bz2
-          bunzip2 < frontal_face_detector.dat.bz2 > data/dlib_hog_model/frontal_face_detector.dat
-          git clone --depth 1 https://github.com/davisking/dlib-models
-          mkdir data/{dlib_cnn_model,dlib_face_landmark_model}
-          7z x dlib-models/mmod_human_face_detector.dat.bz2 -so > data/dlib_cnn_model/mmod_human_face_detector.dat
-          7z x dlib-models/shape_predictor_5_face_landmarks.dat.bz2 -so > data/dlib_face_landmark_model/shape_predictor_5_face_landmarks.dat
-          cp dlib/LICENSE.txt data/LICENSE-dlib
-          cp dlib-models/LICENSE data/LICENSE-dlib-models
+          DESTDIR='./' ci/download-dlib-models.sh
 
       - name: Build plugin
         run: |
@@ -333,9 +365,43 @@ jobs:
           )
           cmake -S . -B build @CmakeArgs ${{ steps.obsdeps.outputs.PLUGIN_CMAKE_OPTIONS_PS }}
           cmake --build build --config RelWithDebInfo -j 4
+          ctest --test-dir build -C RelWithDebInfo --output-on-failure
           cmake --install build --config RelWithDebInfo --prefix "$(Resolve-Path -Path .)/release"
+      - name: Authenticode sign plugin
+        if: ${{ env.WINDOWS_SIGNING_CERT != '' }}
+        run: |
+          $PfxPath = Join-Path $env:RUNNER_TEMP 'obs-face-tracker-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($PfxPath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT))
+            $SignTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $SignTool) { throw 'signtool.exe was not found' }
+            & $SignTool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+              /f $PfxPath /p $env:WINDOWS_SIGNING_PASSWORD `
+              "release\obs-plugins\64bit\obs-face-tracker.dll"
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+          } finally {
+            Remove-Item -LiteralPath $PfxPath -Force -ErrorAction SilentlyContinue
+          }
       - name: Package plugin
         run: ci/windows/package-windows.cmd ${{ matrix.obs }}
+      - name: Authenticode sign installer
+        if: ${{ env.WINDOWS_SIGNING_CERT != '' }}
+        run: |
+          $PfxPath = Join-Path $env:RUNNER_TEMP 'obs-face-tracker-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($PfxPath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT))
+            $SignTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $SignTool) { throw 'signtool.exe was not found' }
+            Get-ChildItem package\*-Windows-Installer.exe | ForEach-Object {
+              & $SignTool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+                /f $PfxPath /p $env:WINDOWS_SIGNING_PASSWORD $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+            }
+          } finally {
+            Remove-Item -LiteralPath $PfxPath -Force -ErrorAction SilentlyContinue
+          }
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:

@@ -2,6 +2,7 @@
 #include <obs.hpp>
 #include "plugin-macros.generated.h"
 #include "helper.hpp"
+#include "source_list.h"
 
 #define MAX_ERROR 2
 
@@ -79,20 +80,32 @@ static void ftmon_update(void *data, obs_data_t *settings)
 	s->landmark_only = obs_data_get_bool(settings, "landmark_only");
 }
 
-static obs_properties_t *ftmon_properties(void *)
+static bool ftmon_source_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
 {
+	obs_property_t *filter = obs_properties_get(props, "filter_name");
+	property_list_add_filters(filter, obs_data_get_string(settings, "source_name"));
+	return true;
+}
+
+static obs_properties_t *ftmon_properties(void *data)
+{
+	auto *s = (struct face_tracker_monitor *)data;
 	obs_properties_t *props;
 	props = obs_properties_create();
 
-	// TODO: use obs_properties_add_list
-	obs_properties_add_text(props, "source_name", obs_module_text("Source name"), OBS_TEXT_DEFAULT);
-	obs_properties_add_text(props, "filter_name", obs_module_text("Filter name"), OBS_TEXT_DEFAULT);
+	obs_property_t *source = obs_properties_add_list(props, "source_name", obs_module_text("Monitor.Source"),
+							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	property_list_add_sources(source, s ? s->context : NULL);
+	obs_property_set_modified_callback(source, ftmon_source_modified);
+	obs_property_t *filter = obs_properties_add_list(props, "filter_name", obs_module_text("Monitor.Filter"),
+							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	property_list_add_filters(filter, s ? s->source_name : NULL);
 
-	obs_properties_add_bool(props, "notrack", "Display original source");
+	obs_properties_add_bool(props, "notrack", obs_module_text("Monitor.Original"));
 
-	obs_properties_add_bool(props, "nosource", "Overlay only");
+	obs_properties_add_bool(props, "nosource", obs_module_text("Monitor.Overlay"));
 
-	obs_properties_add_bool(props, "landmark_only", "Display landmark information only");
+	obs_properties_add_bool(props, "landmark_only", obs_module_text("Monitor.Landmarks"));
 
 	return props;
 }

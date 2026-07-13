@@ -1,0 +1,27 @@
+obs-face-tracker model manifest
+================================
+
+dlib-models revision: fd81b6308a6a73d4ce08859eb2f4b628a21e27a2
+source: https://github.com/davisking/dlib-models
+
+OpenCV Zoo revision: 47534e27c9851bb1128ccc0102f1145e27f23f98
+source: https://github.com/opencv/opencv_zoo
+
+Installed model SHA-256 values:
+
+f3f7aa833fb4a14a46fc48689f45b98d85ef72d6dfaf8bdc012b7d3c522a5426  dlib_hog_model/frontal_face_detector.dat
+be467b1a76f482693de3b0f6a1ff91d092319be71523d4d4b0628f6a53fcb87a  dlib_cnn_model/mmod_human_face_detector.dat
+c4b1e9804792707d3a405c2c16a80a20269e6675021f64a41d30fffafbc41888  dlib_face_landmark_model/shape_predictor_5_face_landmarks.dat
+ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0  yunet_model/face_detection_yunet_2026may.onnx
+
+# Optional InsightFace model; non-commercial research terms apply.
+bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce  scrfd_model/scrfd_2.5g_bnkps.onnx
+
+Optional non-commercial model SHA-256 values:
+
+fbdc2cb80eb9aa7a758672cbfdda32ba6300efe9b6e6c7a299ff7e736b11b92f  dlib_face_landmark_model/shape_predictor_68_face_landmarks.dat
+249a69a1d5f2d7c714a92934d35367d46eb52dc308d46717e82d49e8386b3b80  dlib_face_landmark_model/shape_predictor_68_face_landmarks_GTX.dat
+
+The 68-point models are not included in normal builds because their training
+dataset excludes commercial use. See LICENSE-shape_predictor_68_face_landmarks
+when those optional files are installed.
