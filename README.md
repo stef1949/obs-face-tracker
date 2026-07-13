@@ -9,6 +9,8 @@ The frame of the source is periodically taken to face detection algorithm.
 Once a face is found, the face is tracked.
 Based on the location and the size of the face under tracking, the frame will be cropped.
 
+See [CHANGELOG.md](CHANGELOG.md) for the complete set of changes in this fork.
+
 ## Usage
 
 For several use cases, total 3 methods are provided.
@@ -17,7 +19,7 @@ For several use cases, total 3 methods are provided.
 The face tracker is implemented as a source. You can easily have another source that tracks and zooms into a face.
 1. Click the add button on the source list.
 2. Add `Face Tracker`.
-3. Scroll to the bottom and set `Source` property.
+3. Set the `Source` property in the `Input` section at the top.
 
 See [Properties](doc/properties.md) for the description of each property.
 
@@ -39,6 +41,16 @@ See [Properties](doc/properties-ptz.md) for the description of each property.
 
 See [Limitations](https://github.com/norihiro/obs-face-tracker/wiki/PTZ-Limitation)
 for current limitations of PTZ control feature.
+
+## Installing on Windows
+
+Use the Windows installer when possible. If you install a ZIP manually, extract
+it into the OBS Studio application directory, normally
+`C:\Program Files\obs-studio`. The resulting plugin DLL must be at
+`C:\Program Files\obs-studio\obs-plugins\64bit\obs-face-tracker.dll` (or the
+equivalent path for your OBS installation), not beside `obs64.exe`.
+
+Current release builds are tested against OBS Studio 30, 31, and 32.
 
 ## Wiki
 - [Install procedure for macOS](https://github.com/norihiro/obs-face-tracker/wiki/Install-MacOS)
@@ -81,50 +93,100 @@ make
 
 For Windows, see `.github/workflows/main.yml`.
 
-## Preparing data file
+### Optional CUDA acceleration
 
-You need to prepare a model file.
+The dlib CNN detector can run on NVIDIA GPUs when the plugin is built with
+CUDA and cuDNN. Configure with `-DENABLE_CUDA=ON` and set
+`-DDLIB_USE_CUDA_COMPUTE_CAPABILITIES` for the target GPU (for example, `120`
+for an RTX 50-series GPU). On Windows, `-DCUDNN_RUNTIME_DIR` can point to a
+directory containing the cuDNN runtime DLLs so they are included in the plugin
+package. CUDA acceleration applies to the CNN detector; HOG detection and the
+correlation tracker remain CPU-based.
 
-### HOG model file
-Once you have built on Linux or macOS, you will find an executable file `face-detector-dlib-hog-datagen`.
+### YuNet ONNX detector
 
-Assuming your current directory is `obs-face-tracker`, run it like this.
-```shell
-mkdir data/dlib_hog_model/
-./build/face-detector-dlib-hog-datagen > ./data/dlib_hog_model/frontal_face_detector.dat
+YuNet is available as an optional lightweight CPU detector through ONNX
+Runtime. On Windows, download the pinned runtime SDK and configure the plugin:
+
+```powershell
+$ort = & .\ci\windows\download-onnxruntime.ps1
+cmake -S . -B build -DENABLE_YUNET=ON -DONNXRUNTIME_ROOT="$ort"
 ```
 
-### CNN model file
-The CNN model file `mmod_human_face_detector.dat.bz2` can be downloaded from [dlib-models](https://github.com/davisking/dlib-models/).
+Run `ci/download-dlib-models.sh` before packaging so
+`face_detection_yunet_2026may.onnx` and its MIT license are included. YuNet
+uses one ONNX Runtime inference thread and is the default detector for newly
+created sources in YuNet-enabled builds. Existing sources retain their selected
+detector.
 
-Assuming your current directory is `obs-face-tracker`, run commands like below.
-```shell
-mkdir data/dlib_cnn_model/
-git clone --depth 1 https://github.com/davisking/dlib-models
-bunzip2 < dlib-models/mmod_human_face_detector.dat.bz2 > data/dlib_cnn_model/mmod_human_face_detector.dat
+### SCRFD ONNX detector with CUDA
+
+SCRFD-2.5G is available as a higher-accuracy ONNX detector. On Windows with an
+NVIDIA GPU, use the pinned ONNX Runtime CUDA 12 package and enable both ONNX
+detectors:
+
+```powershell
+$ort = & .\ci\windows\download-onnxruntime.ps1 -GpuCuda12
+cmake -S . -B build `
+  -DENABLE_YUNET=ON `
+  -DENABLE_SCRFD=ON `
+  -DENABLE_ONNXRUNTIME_CUDA=ON `
+  -DONNXRUNTIME_ROOT="$ort"
 ```
 
-### 5-point face landmark model file
-The 5-point face landmark model file `shape_predictor_5_face_landmarks.dat.bz2` can be downloaded from [dlib-models](https://github.com/davisking/dlib-models/).
+The OBS build uses the CUDA 12 ONNX Runtime package so it shares the CUDA major
+version used by OBS's NVIDIA Video Effects module. It requires CUDA 12 runtime
+libraries and cuDNN 9. The downloader also supports `-GpuCuda13` for hosts that
+do not load CUDA 12 GPU modules. SCRFD prefers
+the selected CUDA device and automatically falls back to its single-threaded
+CPU provider if CUDA cannot initialise. Keep `ENABLE_CUDA=OFF` unless the
+legacy dlib CNN detector also needs CUDA; this avoids loading two independent
+cuDNN clients into OBS. `SCRFD input size` controls the square input for
+dynamic-shape models. Fixed-shape models override it; the local SCRFD-2.5G
+model documented below uses 640x640.
 
-Assuming your current directory is `obs-face-tracker`, run commands like below.
+For a self-contained Windows package, set `CUDNN_RUNTIME_DIR` to the cuDNN
+`bin` directory and set `CUDA_RUNTIME_DIRS` to a semicolon-separated list of
+the CUDA runtime, cuBLAS, and cuFFT `bin` directories. The plugin explicitly
+preloads cuDNN's split runtime libraries from its own binary directory before
+creating the CUDA session, which is required when OBS loads a plugin outside
+the process search path.
+
+Place a compatible `scrfd_2.5g_bnkps.onnx` file in `data/scrfd_model`. The
+expected local development model has SHA-256
+`bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce`.
+InsightFace limits its pretrained models to non-commercial research use, so the
+standard model updater does not download SCRFD automatically. Review
+`data/LICENSE-scrfd-model` and the current upstream terms before use or
+redistribution.
+
+## Preparing model data
+
+The model updater downloads the pinned upstream dlib weights, verifies both the
+compressed archives and installed files with SHA-256, and records their source
+revision in `data/MODEL-MANIFEST.txt`.
+
+Assuming the current directory is `obs-face-tracker`, run:
+
 ```shell
-mkdir data/dlib_face_landmark_model/
-git clone --depth 1 https://github.com/davisking/dlib-models
-bunzip2 < dlib-models/shape_predictor_5_face_landmarks.dat.bz2 > data/dlib_face_landmark_model/shape_predictor_5_face_landmarks.dat
+DESTDIR='./' ci/download-dlib-models.sh
 ```
 
-### 68-point face landmark model file
+This installs the HOG face detector, dlib CNN face detector, YuNet ONNX face
+detector, and 5-point landmark model under `data`. Their pinned revisions and
+checksums are maintained in `ci/dlib-models-manifest.txt`. SCRFD is kept
+separate because its pretrained weights have additional use restrictions.
+
+The optional 68-point landmark models can be downloaded with:
+
+```shell
+DESTDIR='./' ci/download-dlib-models.sh --nonfree
+```
+
 > [!NOTE]
-> The 68-point face landmark model is a non-free license.
-. Check [README](https://github.com/davisking/dlib-models/#shape_predictor_68_face_landmarksdatbz2) for the restriction.
-
-If you want to use the 68-point face landmark model file `shape_predictor_68_face_landmarks.dat.bz2`, run commands like below.
-```shell
-mkdir data/dlib_face_landmark_model/
-git clone --depth 1 https://github.com/davisking/dlib-models
-bunzip2 < dlib-models/shape_predictor_68_face_landmarks.dat.bz2 > data/dlib_face_landmark_model/shape_predictor_68_face_landmarks.dat
-```
+> The training dataset used by the 68-point models excludes commercial use.
+> Review the generated `LICENSE-shape_predictor_68_face_landmarks` before using
+> either optional model.
 
 ### Installing the model files
 Once you have prepared the model files under `data` directory,

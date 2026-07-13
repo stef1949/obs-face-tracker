@@ -2,6 +2,96 @@
 #include "plugin-macros.generated.h"
 #include "helper.hpp"
 
+#ifdef _WIN32
+#include <util/bmem.h>
+#include <util/platform.h>
+#include <windows.h>
+
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <vector>
+#endif
+
+#ifdef _WIN32
+bool preload_cudnn_runtime_libraries()
+{
+	static std::once_flag load_once;
+	static bool loaded = false;
+	std::call_once(load_once, [] {
+		const char *module_path_utf8 = obs_get_module_binary_path(obs_current_module());
+		wchar_t *module_path_wide = nullptr;
+		if (!module_path_utf8 ||
+		    !os_utf8_to_wcs_ptr(module_path_utf8, std::strlen(module_path_utf8), &module_path_wide)) {
+			blog(LOG_ERROR, "cannot resolve the plugin directory for cuDNN runtime loading");
+			return;
+		}
+
+		std::wstring directory(module_path_wide);
+		bfree(module_path_wide);
+		size_t separator = directory.find_last_of(L"\\/");
+		if (separator == std::wstring::npos) {
+			blog(LOG_ERROR, "cannot resolve the plugin directory from '%s'", module_path_utf8);
+			return;
+		}
+		directory.resize(separator + 1);
+
+		WIN32_FIND_DATAW entry = {};
+		HANDLE search = FindFirstFileW((directory + L"cudnn*.dll").c_str(), &entry);
+		if (search == INVALID_HANDLE_VALUE) {
+			blog(LOG_ERROR, "no cuDNN runtime DLLs were found beside the plugin");
+			return;
+		}
+
+		std::vector<std::wstring> pending;
+		do {
+			if (!(entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				pending.emplace_back(entry.cFileName);
+		} while (FindNextFileW(search, &entry));
+		FindClose(search);
+
+		static std::vector<HMODULE> modules;
+		bool made_progress;
+		do {
+			made_progress = false;
+			std::vector<std::wstring> unresolved;
+			for (const std::wstring &name : pending) {
+				std::wstring path = directory + name;
+				HMODULE module = LoadLibraryExW(path.c_str(), nullptr,
+							LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+								LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+				if (module) {
+					modules.push_back(module);
+					made_progress = true;
+				} else {
+					unresolved.push_back(name);
+				}
+			}
+			pending.swap(unresolved);
+		} while (made_progress && !pending.empty());
+
+		size_t failed = 0;
+		for (const std::wstring &name : pending) {
+			std::wstring path = directory + name;
+			SetLastError(ERROR_SUCCESS);
+			HMODULE module = LoadLibraryExW(path.c_str(), nullptr,
+						LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+			if (module) {
+				modules.push_back(module);
+			} else {
+				failed++;
+				blog(LOG_ERROR, "failed to preload cuDNN runtime '%ls' (Windows error %lu)",
+				     name.c_str(), GetLastError());
+			}
+		}
+		loaded = !modules.empty() && failed == 0;
+		if (loaded)
+			blog(LOG_INFO, "preloaded %zu cuDNN runtime libraries", modules.size());
+	});
+	return loaded;
+}
+#endif
+
 void draw_rect_upsize(rect_s r, float upsize_l, float upsize_r, float upsize_t, float upsize_b)
 {
 	if (r.x0 >= r.x1 || r.y0 >= r.y1)

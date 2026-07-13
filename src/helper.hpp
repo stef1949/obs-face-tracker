@@ -1,6 +1,14 @@
 #pragma once
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <limits>
 #include <vector>
+
+struct obs_data;
+typedef struct obs_data obs_data_t;
 
 #ifdef _WIN32
 #define DEBUG_DATA_PATH_FILTER "TSV Files (*.tsv);;Data Files (*.dat);;All Files (*.*)"
@@ -35,6 +43,77 @@ struct rectf_s
 	float x1;
 	float y1;
 };
+
+enum rect_selection_policy {
+	rect_selection_sticky = 0,
+	rect_selection_largest = 1,
+	rect_selection_center = 2,
+	rect_selection_first = 3,
+};
+
+static inline float rect_area(const rect_s &rect)
+{
+	float width = (float)(rect.x1 - rect.x0);
+	float height = (float)(rect.y1 - rect.y0);
+	return width > 0.0f && height > 0.0f ? width * height : 0.0f;
+}
+
+static inline float rect_center_distance_sq(const rect_s &rect, float x, float y)
+{
+	float dx = (rect.x0 + rect.x1) * 0.5f - x;
+	float dy = (rect.y0 + rect.y1) * 0.5f - y;
+	return dx * dx + dy * dy;
+}
+
+static inline int select_gpu_device(int requested, int device_count)
+{
+	if (device_count <= 0)
+		return -1;
+	if (requested < 0 || requested >= device_count)
+		return 0;
+	return requested;
+}
+
+static inline uint64_t interval_deadline_ns(uint64_t now_ns, int interval_ms)
+{
+	return now_ns + (uint64_t)(interval_ms > 0 ? interval_ms : 1) * 1000000ULL;
+}
+
+static inline size_t select_rect_index(const std::vector<rect_s> &rects, enum rect_selection_policy policy,
+				       bool reference_valid, const rect_s &reference, const rectf_s &frame)
+{
+	if (rects.empty() || policy == rect_selection_first)
+		return 0;
+
+	size_t best = 0;
+	if (policy == rect_selection_largest || (policy == rect_selection_sticky && !reference_valid)) {
+		float best_area = rect_area(rects[0]);
+		for (size_t i = 1; i < rects.size(); i++) {
+			float area = rect_area(rects[i]);
+			if (area > best_area) {
+				best = i;
+				best_area = area;
+			}
+		}
+		return best;
+	}
+
+	float x = (frame.x0 + frame.x1) * 0.5f;
+	float y = (frame.y0 + frame.y1) * 0.5f;
+	if (policy == rect_selection_sticky) {
+		x = (reference.x0 + reference.x1) * 0.5f;
+		y = (reference.y0 + reference.y1) * 0.5f;
+	}
+	float best_distance = rect_center_distance_sq(rects[0], x, y);
+	for (size_t i = 1; i < rects.size(); i++) {
+		float distance = rect_center_distance_sq(rects[i], x, y);
+		if (distance < best_distance) {
+			best = i;
+			best_distance = distance;
+		}
+	}
+	return best;
+}
 
 struct f3
 {
@@ -76,7 +155,7 @@ struct f3
 
 static inline bool isnan(const f3 &a)
 {
-	return isnan(a.v[0]) || isnan(a.v[1]) || isnan(a.v[2]);
+	return std::isnan(a.v[0]) || std::isnan(a.v[1]) || std::isnan(a.v[2]);
 }
 
 static inline int get_width(const rect_s &r)
@@ -117,6 +196,13 @@ static inline int common_area(const rect_s &a, const rect_s &b)
 	return common_length(a.x0, a.x1, b.x0, b.x1) * common_length(a.y0, a.y1, b.y0, b.y1);
 }
 
+static inline float rect_iou(const rect_s &a, const rect_s &b)
+{
+	float intersection = (float)common_area(a, b);
+	float union_area = rect_area(a) + rect_area(b) - intersection;
+	return union_area > 0.0f ? intersection / union_area : 0.0f;
+}
+
 template<typename T> static inline bool samesign(const T &a, const T &b)
 {
 	if (a > 0 && b > 0)
@@ -129,6 +215,38 @@ template<typename T> static inline bool samesign(const T &a, const T &b)
 static inline float sqf(float x)
 {
 	return x * x;
+}
+
+/*
+ * Apply a symmetric soft deadband with hysteresis.  Once an axis settles
+ * inside the deadband it remains held until the error clears the nonlinear
+ * band (or half the deadband when no nonlinear band is configured).  This
+ * prevents detector noise near the boundary from repeatedly reversing the
+ * controller output.
+ */
+static inline float apply_control_deadband(float value, float deadband, float nonlinear, bool &settled)
+{
+	deadband = std::max(deadband, 0.0f);
+	nonlinear = std::max(nonlinear, 0.0f);
+	const float magnitude = std::abs(value);
+	const float release = deadband + std::max(nonlinear, deadband * 0.5f);
+
+	if (settled) {
+		if (magnitude <= release)
+			return 0.0f;
+		settled = false;
+	} else if (magnitude <= deadband) {
+		settled = true;
+		return 0.0f;
+	}
+
+	if (nonlinear > 0.0f && magnitude < deadband + nonlinear) {
+		const float softened = sqf(magnitude - deadband) / (2.0f * nonlinear);
+		return std::copysign(softened, value);
+	}
+
+	const float adjusted = magnitude - deadband - nonlinear * 0.5f;
+	return std::copysign(std::max(adjusted, 0.0f), value);
 }
 
 static inline rectf_s f3_to_rectf(const f3 &u, float w, float h)
@@ -156,3 +274,7 @@ inline double from_dB(double x)
 }
 
 void debug_data_open(FILE **dest, char **last_name, obs_data_t *settings, const char *name);
+
+#ifdef _WIN32
+bool preload_cudnn_runtime_libraries();
+#endif

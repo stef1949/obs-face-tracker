@@ -1,17 +1,24 @@
 #include <obs-module.h>
 #include <util/platform.h>
 #include <util/threading.h>
+#include <util/bmem.h>
+#include <cstring>
 #include <string>
+#include <mutex>
+#include <utility>
 #include "plugin-macros.generated.h"
 #include "face-detector-dlib-cnn.h"
+#include "helper.hpp"
 #include "texture-object.h"
 
 #include <dlib/dnn.h>
 #include <dlib/data_io.h>
 #include <dlib/image_processing.h>
 #include <dlib/array2d/array2d_kernel.h>
+#include <dlib/cuda/cuda_dlib.h>
 
 #define MAX_ERROR 2
+static constexpr uint64_t model_retry_ns = 5ULL * 1000ULL * 1000ULL * 1000ULL;
 
 using namespace dlib;
 template<long num_filters, typename SUBNET> using con5d = con<num_filters, 5, 5, 2, 2, SUBNET>;
@@ -33,6 +40,9 @@ struct private_s
 	bool has_error = false;
 	int crop_l = 0, crop_r = 0, crop_t = 0, crop_b = 0;
 	int n_error = 0;
+	int gpu_device = 0;
+	int active_gpu_device = -2;
+	uint64_t retry_after_ns = 0;
 };
 
 face_detector_dlib_cnn::face_detector_dlib_cnn()
@@ -42,10 +52,11 @@ face_detector_dlib_cnn::face_detector_dlib_cnn()
 
 face_detector_dlib_cnn::~face_detector_dlib_cnn()
 {
+	stop();
 	delete p;
 }
 
-void face_detector_dlib_cnn::set_texture(std::shared_ptr<texture_object> &tex, int crop_l, int crop_r, int crop_t,
+void face_detector_dlib_cnn::set_texture(const std::shared_ptr<texture_object> &tex, int crop_l, int crop_r, int crop_t,
 					 int crop_b)
 {
 	p->tex = tex;
@@ -57,24 +68,27 @@ void face_detector_dlib_cnn::set_texture(std::shared_ptr<texture_object> &tex, i
 
 void face_detector_dlib_cnn::detect_main()
 {
-	if (!p->tex)
+	auto tex = std::move(p->tex);
+	p->rects.clear();
+	if (!tex)
 		return;
 
-	dlib::matrix<dlib::rgb_pixel> img;
-	if (!p->tex->get_dlib_rgb_image(img))
+	auto img_full = tex->get_dlib_rgb_image();
+	if (!img_full)
 		return;
+	const image_t *img = img_full.get();
+	image_t img_crop;
 
 	int x0 = 0, y0 = 0;
 	if (p->crop_l > 0 || p->crop_r > 0 || p->crop_t > 0 || p->crop_b > 0) {
-		image_t img_crop;
-		x0 = (int)(p->crop_l / p->tex->scale);
-		int x1 = img.nc() - (int)(p->crop_r / p->tex->scale);
-		y0 = (int)(p->crop_t / p->tex->scale);
-		int y1 = img.nr() - (int)(p->crop_b / p->tex->scale);
+		x0 = (int)(p->crop_l / tex->scale);
+		int x1 = img->nc() - (int)(p->crop_r / tex->scale);
+		y0 = (int)(p->crop_t / tex->scale);
+		int y1 = img->nr() - (int)(p->crop_b / tex->scale);
 		if (x1 - x0 < 80 || y1 - y0 < 80) {
 			if (p->n_error++ < MAX_ERROR)
 				blog(LOG_ERROR, "too small image: %dx%d cropped left=%d right=%d top=%d bottom=%d",
-				     (int)img.nc(), (int)img.nr(), p->crop_l, p->crop_r, p->crop_t, p->crop_b);
+				     (int)img->nc(), (int)img->nr(), p->crop_l, p->crop_r, p->crop_t, p->crop_b);
 			return;
 		} else if (p->n_error) {
 			p->n_error--;
@@ -82,47 +96,84 @@ void face_detector_dlib_cnn::detect_main()
 		img_crop.set_size(y1 - y0, x1 - x0);
 		for (int y = y0; y < y1; y++) {
 			for (int x = x0; x < x1; x++) {
-				img_crop(y - y0, x - x0) = img(y, x);
+				img_crop(y - y0, x - x0) = (*img)(y, x);
 			}
 		}
-		img = img_crop;
+		img = &img_crop;
 	}
-	if (img.nc() < 80 || img.nr() < 80) {
+	if (img->nc() < 80 || img->nr() < 80) {
 		if (p->n_error++ < MAX_ERROR)
-			blog(LOG_ERROR, "too small image: %dx%d", (int)img.nc(), (int)img.nr());
+			blog(LOG_ERROR, "too small image: %dx%d", (int)img->nc(), (int)img->nr());
 		return;
 	} else if (p->n_error) {
 		p->n_error--;
 	}
 
+#ifdef DLIB_USE_CUDA
+	try {
+#ifdef _WIN32
+		(void)preload_cudnn_runtime_libraries();
+#endif
+		int device_count = dlib::cuda::get_num_devices();
+		int device = select_gpu_device(p->gpu_device, device_count);
+		if (device < 0) {
+			if (p->active_gpu_device != -1)
+				blog(LOG_ERROR, "CNN GPU acceleration is enabled, but no CUDA device is available");
+			p->active_gpu_device = -1;
+			return;
+		}
+		dlib::cuda::set_device(device);
+		if (p->active_gpu_device != device) {
+			blog(LOG_INFO, "CNN detector using CUDA device %d: %s", device,
+			     dlib::cuda::get_device_name(device).c_str());
+			p->active_gpu_device = device;
+		}
+	} catch (const std::exception &e) {
+		blog(LOG_ERROR, "failed to initialize CNN GPU acceleration: %s", e.what());
+		p->active_gpu_device = -1;
+		return;
+	}
+#else
+	if (p->active_gpu_device != -1) {
+		blog(LOG_INFO, "CNN detector using CPU (plugin was built without CUDA/cuDNN)");
+		p->active_gpu_device = -1;
+	}
+#endif
+
 	if (!p->net_loaded) {
-		p->net_loaded = true;
+		if (os_gettime_ns() < p->retry_after_ns)
+			return;
 		try {
 			blog(LOG_INFO, "loading file '%s'", p->model_filename.c_str());
 			deserialize(p->model_filename.c_str()) >> p->net;
+			p->net_loaded = true;
 			p->has_error = false;
-		} catch (...) {
-			blog(LOG_ERROR, "failed to load file '%s'", p->model_filename.c_str());
+			p->retry_after_ns = 0;
+		} catch (const std::exception &e) {
+			blog(LOG_ERROR, "failed to load file '%s': %s", p->model_filename.c_str(), e.what());
 			p->has_error = true;
+			p->retry_after_ns = os_gettime_ns() + model_retry_ns;
+		} catch (...) {
+			blog(LOG_ERROR, "failed to load file '%s': unknown exception", p->model_filename.c_str());
+			p->has_error = true;
+			p->retry_after_ns = os_gettime_ns() + model_retry_ns;
 		}
 	}
 
 	if (p->has_error)
 		return;
 
-	auto dets = p->net(img);
+	auto dets = p->net(*img);
 	p->rects.resize(dets.size());
 	for (size_t i = 0; i < dets.size(); i++) {
 		auto &det = dets[i];
 		rect_s &r = p->rects[i];
-		r.x0 = (det.rect.left() + x0) * p->tex->scale;
-		r.y0 = (det.rect.top() + y0) * p->tex->scale;
-		r.x1 = (det.rect.right() + x0) * p->tex->scale;
-		r.y1 = (det.rect.bottom() + y0) * p->tex->scale;
+		r.x0 = (det.rect.left() + x0) * tex->scale;
+		r.y0 = (det.rect.top() + y0) * tex->scale;
+		r.x1 = (det.rect.right() + x0) * tex->scale;
+		r.y1 = (det.rect.bottom() + y0) * tex->scale;
 		r.score = det.detection_confidence;
 	}
-
-	p->tex.reset();
 }
 
 void face_detector_dlib_cnn::get_faces(std::vector<struct rect_s> &rects)
@@ -132,8 +183,31 @@ void face_detector_dlib_cnn::get_faces(std::vector<struct rect_s> &rects)
 
 void face_detector_dlib_cnn::set_model(const char *filename)
 {
-	if (p->model_filename != filename) {
-		p->model_filename = filename;
+	const char *safe_filename = filename ? filename : "";
+	if (p->model_filename != safe_filename) {
+		p->model_filename = safe_filename;
 		p->net_loaded = false;
+		p->retry_after_ns = 0;
 	}
+}
+
+void face_detector_dlib_cnn::set_gpu_device(int device)
+{
+	p->gpu_device = device;
+}
+
+std::vector<std::string> face_detector_dlib_cnn::get_gpu_device_names()
+{
+	std::vector<std::string> devices;
+#ifdef DLIB_USE_CUDA
+	try {
+		int count = dlib::cuda::get_num_devices();
+		devices.reserve((size_t)count);
+		for (int i = 0; i < count; i++)
+			devices.push_back(dlib::cuda::get_device_name(i));
+	} catch (const std::exception &e) {
+		blog(LOG_ERROR, "failed to enumerate CUDA devices: %s", e.what());
+	}
+#endif
+	return devices;
 }

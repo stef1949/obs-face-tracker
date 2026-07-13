@@ -24,7 +24,7 @@ SolidCompression=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\release\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; Flags: dontcopy
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
@@ -33,6 +33,17 @@ Name: "{group}\{cm:ProgramOnTheWeb,{#MyAppName}}"; Filename: "{#MyAppURL}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 [Code]
+function NormalizeOBSDirectory(Path: string): string;
+begin
+  Result := RemoveBackslashUnlessRoot(Path);
+
+  // A common manual-install mistake is selecting the directory containing
+  // obs64.exe. Plugin packages must be installed at the OBS application root.
+  if (CompareText(ExtractFileName(Result), '64bit') = 0) and
+     (CompareText(ExtractFileName(ExtractFileDir(Result)), 'bin') = 0) then
+    Result := ExtractFileDir(ExtractFileDir(Result));
+end;
+
 procedure InitializeWizard();
 var
   GPLText: AnsiString;
@@ -56,8 +67,33 @@ begin
   // initialize default path, which will be returned when the following registry
   // key queries fail due to missing keys or for some different reason
   Result := '{pf}\obs-studio';
-  // query the first registry value; if this succeeds, return the obtained value
-  if RegQueryStringValue(HKLM32, 'SOFTWARE\OBS Studio', '', InstallPath) then
-    Result := InstallPath
+  // Prefer the native 64-bit registry view and retain the 32-bit fallback for
+  // older OBS installers.
+  if RegQueryStringValue(HKLM64, 'SOFTWARE\OBS Studio', '', InstallPath) or
+     RegQueryStringValue(HKLM32, 'SOFTWARE\OBS Studio', '', InstallPath) then
+    Result := InstallPath;
+
+  Result := NormalizeOBSDirectory(Result);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  OBSDirectory: string;
+  OBSExecutable: string;
+begin
+  Result := True;
+
+  if CurPageID = wpSelectDir then begin
+    OBSDirectory := NormalizeOBSDirectory(WizardForm.DirEdit.Text);
+    WizardForm.DirEdit.Text := OBSDirectory;
+    OBSExecutable := AddBackslash(OBSDirectory) + 'bin\64bit\obs64.exe';
+
+    if not FileExists(OBSExecutable) then begin
+      MsgBox(
+        'Select the OBS Studio application directory. The selected directory must contain bin\64bit\obs64.exe.',
+        mbError, MB_OK);
+      Result := False;
+    end;
+  end;
 end;
 

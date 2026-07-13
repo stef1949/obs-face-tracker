@@ -22,6 +22,7 @@ face_detector_base::face_detector_base()
 
 face_detector_base::~face_detector_base()
 {
+	stop();
 	bfree(leak_test);
 	pthread_cond_destroy(&cond);
 	pthread_mutex_destroy(&mutex);
@@ -38,7 +39,7 @@ void *face_detector_base::thread_routine(void *p)
 	os_set_thread_name("face-det");
 
 	base->lock();
-	while (!base->request_stop) {
+	while (!base->request_stop.load(std::memory_order_acquire)) {
 		try {
 			base->detect_main();
 		} catch (std::exception &e) {
@@ -54,22 +55,29 @@ void *face_detector_base::thread_routine(void *p)
 
 void face_detector_base::start()
 {
+	if (running.load(std::memory_order_acquire))
+		return;
+
 	blog(LOG_INFO, "face_detector_base: starting the thread.");
-	request_stop = 0;
-	pthread_create(&thread, NULL, thread_routine, (void *)this);
-	running = 1;
+	request_stop.store(false, std::memory_order_release);
+	int err = pthread_create(&thread, NULL, thread_routine, (void *)this);
+	if (err) {
+		blog(LOG_ERROR, "face_detector_base: pthread_create failed (%d)", err);
+		return;
+	}
+	running.store(true, std::memory_order_release);
 }
 
 void face_detector_base::stop()
 {
 	blog(LOG_INFO, "face_detector_base: stopping the thread...");
 	lock();
-	request_stop = 1;
+	request_stop.store(true, std::memory_order_release);
 	signal();
 	unlock();
-	if (running) {
+	if (running.load(std::memory_order_acquire)) {
 		pthread_join(thread, NULL);
-		running = 0;
+		running.store(false, std::memory_order_release);
 	}
 	blog(LOG_INFO, "face_detector_base: stopped the thread...");
 }

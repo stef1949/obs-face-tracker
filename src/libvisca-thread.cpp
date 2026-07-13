@@ -5,6 +5,7 @@
 #include <graphics/graphics.h>
 #include <climits>
 #include <cstdlib>
+#include <string>
 #include "plugin-macros.generated.h"
 #include "libvisca-thread.hpp"
 #include "libvisca.h"
@@ -19,16 +20,24 @@ libvisca_thread::libvisca_thread()
 	iface = NULL;
 	camera = NULL;
 	data = NULL;
-	pan_rsvd = 0;
-	tilt_rsvd = 0;
-	zoom_rsvd = 0;
-	zoom_got = 0;
+	data_changed.store(false, std::memory_order_relaxed);
+	preset_changed.store(false, std::memory_order_relaxed);
+	pan_rsvd.store(0, std::memory_order_relaxed);
+	tilt_rsvd.store(0, std::memory_order_relaxed);
+	zoom_rsvd.store(0, std::memory_order_relaxed);
+	preset_rsvd.store(0, std::memory_order_relaxed);
+	zoom_got.store(0, std::memory_order_relaxed);
 	pthread_mutex_init(&mutex, 0);
 
 	add_ref(); // release inside thread_main
 	pthread_t thread;
-	pthread_create(&thread, NULL, libvisca_thread::thread_main, (void *)this);
-	pthread_detach(thread);
+	int err = pthread_create(&thread, NULL, libvisca_thread::thread_main, (void *)this);
+	if (err) {
+		blog(LOG_ERROR, "libvisca_thread: pthread_create failed (%d)", err);
+		release();
+	} else {
+		pthread_detach(thread);
+	}
 }
 
 libvisca_thread::~libvisca_thread()
@@ -47,30 +56,32 @@ libvisca_thread::~libvisca_thread()
 void libvisca_thread::thread_connect()
 {
 	pthread_mutex_lock(&mutex);
+	data_changed.store(false, std::memory_order_release);
+	std::string address = data ? obs_data_get_string(data, "address") : "";
+	int port = data ? (int)obs_data_get_int(data, "port") : 0;
+	pthread_mutex_unlock(&mutex);
+	if (iface) {
+		VISCA_close(iface);
+		bfree(iface);
+		iface = NULL;
+	}
+	if (address.empty() || port <= 0)
+		return;
 
-	const char *address = obs_data_get_string(data, "address");
-	int port = (int)obs_data_get_int(data, "port");
 	auto *iface_new = (struct _VISCA_interface *)bzalloc(sizeof(struct _VISCA_interface));
-	debug("libvisca_thread::thread_connect connecting to address=%s port=%d...", address, port);
-	if (VISCA_open_tcp(iface_new, address, port) != VISCA_SUCCESS) {
-		blog(LOG_ERROR, "failed to connect %s:%d", address, port);
+	debug("libvisca_thread::thread_connect connecting to address=%s port=%d...", address.c_str(), port);
+	if (VISCA_open_tcp(iface_new, address.c_str(), port) != VISCA_SUCCESS) {
+		blog(LOG_ERROR, "failed to connect %s:%d", address.c_str(), port);
 		bfree(iface_new);
 		iface_new = NULL;
 	}
 	debug("libvisca_thread::thread_connect connected.");
-	pthread_mutex_unlock(&mutex);
 	if (!iface_new)
 		return;
 
-	if (iface) {
-		VISCA_close(iface);
-		bfree(iface);
-	}
 	iface = iface_new;
 	if (!camera)
 		camera = (VISCACamera_t *)bzalloc(sizeof(VISCACamera_t));
-	data_changed = false;
-
 	debug("libvisca_thread::thread_connect sending VISCA_clear...");
 	camera->address = 1;
 	VISCA_clear(iface, camera);
@@ -164,7 +175,7 @@ void libvisca_thread::thread_loop()
 	int n_fail = 0;
 
 	while (get_ref() > 1) {
-		if (data_changed || n_fail > TH_FAIL) {
+		if (data_changed.load(std::memory_order_acquire) || n_fail > TH_FAIL) {
 			thread_connect();
 			pan_prev = INT_MIN;
 			tilt_prev = INT_MIN;
@@ -174,9 +185,9 @@ void libvisca_thread::thread_loop()
 			os_sleep_ms(50);
 			continue;
 		}
-		int pan = os_atomic_load_long(&pan_rsvd);
-		int tilt = os_atomic_load_long(&tilt_rsvd);
-		int zoom = os_atomic_load_long(&zoom_rsvd);
+		int pan = (int)pan_rsvd.load(std::memory_order_acquire);
+		int tilt = (int)tilt_rsvd.load(std::memory_order_acquire);
+		int zoom = (int)zoom_rsvd.load(std::memory_order_acquire);
 		bool ptz_changed = false;
 		if (pan != pan_prev || tilt != tilt_prev) {
 			if (send_pantilt(iface, camera, pan, tilt)) {
@@ -198,20 +209,21 @@ void libvisca_thread::thread_loop()
 			}
 		}
 
-		if (os_atomic_set_bool(&preset_changed, false)) {
+		if (preset_changed.exchange(false, std::memory_order_acq_rel)) {
 			os_sleep_ms(48);
-			debug("libvisca_thread::thread_loop recall preset=%d", (int)preset_rsvd);
-			VISCA_memory_recall(iface, camera, preset_rsvd);
+			int preset = preset_rsvd.load(std::memory_order_acquire);
+			debug("libvisca_thread::thread_loop recall preset=%d", preset);
+			VISCA_memory_recall(iface, camera, preset);
 			os_sleep_ms(48);
 		}
 
 		if (zoom != 0) {
 			uint16_t zoom_cur = 0;
 			if (VISCA_get_zoom_value(iface, camera, &zoom_cur) == VISCA_SUCCESS) {
-				if (zoom_cur != zoom_got) {
+				if (zoom_cur != zoom_got.load(std::memory_order_relaxed)) {
 					debug("libvisca_thread::thread_loop got zoom=%d", (int)zoom_cur);
 				}
-				os_atomic_set_long(&zoom_got, (long)zoom_cur);
+				zoom_got.store((long)zoom_cur, std::memory_order_release);
 			}
 		}
 
@@ -224,19 +236,20 @@ void libvisca_thread::set_config(struct obs_data *data_)
 {
 	pthread_mutex_lock(&mutex);
 
+	std::string address_old = data ? obs_data_get_string(data, "address") : "";
+	int port_old = data ? (int)obs_data_get_int(data, "port") : 0;
+	std::string address_new = data_ ? obs_data_get_string(data_, "address") : "";
+	int port_new = data_ ? (int)obs_data_get_int(data_, "port") : 0;
+
 	obs_data_addref(data_);
 	if (data) {
 		obs_data_release(data);
-		const char *address_old = obs_data_get_string(data, "address");
-		int port_old = (int)obs_data_get_int(data, "port");
-		const char *address_new = obs_data_get_string(data_, "address");
-		int port_new = (int)obs_data_get_int(data_, "port");
-		if (strcmp(address_old, address_new))
-			data_changed = true;
+		if (address_old != address_new)
+			data_changed.store(true, std::memory_order_release);
 		if (port_old != port_new)
-			data_changed = true;
+			data_changed.store(true, std::memory_order_release);
 	} else
-		data_changed = true;
+		data_changed.store(true, std::memory_order_release);
 	data = data_;
 
 	pthread_mutex_unlock(&mutex);
