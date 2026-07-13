@@ -30,12 +30,15 @@ public:
 
 	std::shared_ptr<texture_object> get_cvtex() override
 	{
-		if (scale < 1.0f)
-			scale = 1.0f;
-		scale_texture(ctx, scale);
-		if (stage_to_surface(ctx, scale))
+		float current_scale = scale.load(std::memory_order_acquire);
+		if (current_scale < 1.0f) {
+			current_scale = 1.0f;
+			scale.store(current_scale, std::memory_order_release);
+		}
+		scale_texture(ctx, current_scale);
+		if (stage_to_surface(ctx, current_scale))
 			return NULL;
-		return surface_to_cvtex(ctx, scale);
+		return surface_to_cvtex(ctx, current_scale);
 	};
 };
 
@@ -197,41 +200,30 @@ static bool ftf_reset_tracking(obs_properties_t *, obs_property_t *, void *data)
 	s->filter_int_out = f3(w * 0.5f, h * 0.5f, z);
 	s->filter_int = f3(0, 0, 0);
 	s->filter_lpf = f3(0, 0, 0);
+	for (bool &axis : s->settled)
+		axis = false;
 	s->ftm->reset_requested = true;
 
 	return true;
 }
 
-static obs_properties_t *ftf_properties(void *data)
+static obs_properties_t *ft_properties(void *data, bool include_input)
 {
 	auto *s = (struct face_tracker_filter *)data;
 	obs_properties_t *props;
 	props = obs_properties_create();
 
+	if (include_input) {
+		obs_properties_t *pp = obs_properties_create();
+		obs_property_t *p = obs_properties_add_list(pp, "target_name", obs_module_text("Source"),
+						    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+		property_list_add_sources(p, s ? s->context : NULL);
+		obs_properties_add_group(props, "input", obs_module_text("Input"), OBS_GROUP_NORMAL, pp);
+	}
+
 	obs_properties_add_button(props, "ftf_reset_tracking", obs_module_text("Reset tracking"), ftf_reset_tracking);
 
-	{
-		obs_properties_t *pp = obs_properties_create();
-		obs_property_t *p = obs_properties_add_list(pp, "preset_name", obs_module_text("Preset"),
-							    OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
-		obs_data_t *settings = obs_source_get_settings(s->context);
-		if (settings) {
-			ftf_preset_item_to_list(p, settings);
-			obs_data_release(settings);
-		}
-		obs_properties_add_button(pp, "preset_load", obs_module_text("Load preset"), ftf_preset_load);
-		obs_properties_add_button(pp, "preset_save", obs_module_text("Save preset"), ftf_preset_save);
-		obs_properties_add_button(pp, "preset_delete", obs_module_text("Delete preset"), ftf_preset_delete);
-		obs_properties_add_bool(pp, "preset_mask_track", obs_module_text("Save and load tracking parameters"));
-		obs_properties_add_bool(pp, "preset_mask_control", obs_module_text("Save and load control parameters"));
-		obs_properties_add_group(props, "preset_grp", obs_module_text("Preset"), OBS_GROUP_NORMAL, pp);
-	}
-
-	{
-		obs_properties_t *pp = obs_properties_create();
-		face_tracker_manager::get_properties(pp);
-		obs_properties_add_group(props, "ftm", obs_module_text("Face detection options"), OBS_GROUP_NORMAL, pp);
-	}
+	face_tracker_manager::get_properties(props);
 
 	{
 		obs_properties_t *pp = obs_properties_create();
@@ -279,6 +271,23 @@ static obs_properties_t *ftf_properties(void *data)
 
 	{
 		obs_properties_t *pp = obs_properties_create();
+		obs_property_t *p = obs_properties_add_list(pp, "preset_name", obs_module_text("Preset"),
+						    OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+		obs_data_t *settings = obs_source_get_settings(s->context);
+		if (settings) {
+			ftf_preset_item_to_list(p, settings);
+			obs_data_release(settings);
+		}
+		obs_properties_add_button(pp, "preset_load", obs_module_text("Load preset"), ftf_preset_load);
+		obs_properties_add_button(pp, "preset_save", obs_module_text("Save preset"), ftf_preset_save);
+		obs_properties_add_button(pp, "preset_delete", obs_module_text("Delete preset"), ftf_preset_delete);
+		obs_properties_add_bool(pp, "preset_mask_track", obs_module_text("Save and load tracking parameters"));
+		obs_properties_add_bool(pp, "preset_mask_control", obs_module_text("Save and load control parameters"));
+		obs_properties_add_group(props, "preset_grp", obs_module_text("Preset"), OBS_GROUP_NORMAL, pp);
+	}
+
+	{
+		obs_properties_t *pp = obs_properties_create();
 		obs_properties_add_bool(pp, "debug_faces", "Show face detection results");
 		obs_properties_add_bool(pp, "debug_notrack", "Stop tracking faces");
 		obs_properties_add_bool(pp, "debug_always_show", "Always show information (useful for demo)");
@@ -296,20 +305,14 @@ static obs_properties_t *ftf_properties(void *data)
 	return props;
 }
 
+static obs_properties_t *ftf_properties(void *data)
+{
+	return ft_properties(data, false);
+}
+
 static obs_properties_t *fts_properties(void *data)
 {
-	auto *s = (struct face_tracker_filter *)data;
-
-	obs_properties_t *props = ftf_properties(data);
-
-	obs_properties_t *pp = obs_properties_create();
-	obs_property_t *p = obs_properties_add_list(pp, "target_name", obs_module_text("Source"), OBS_COMBO_TYPE_LIST,
-						    OBS_COMBO_FORMAT_STRING);
-	property_list_add_sources(p, s ? s->context : NULL);
-
-	obs_properties_add_group(props, "input", obs_module_text("Input"), OBS_GROUP_NORMAL, pp);
-
-	return props;
+	return ft_properties(data, true);
 }
 
 static void ftf_get_defaults(obs_data_t *settings)
@@ -327,6 +330,12 @@ static void ftf_get_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, "Tdlpf", 2.0);
 	obs_data_set_default_double(settings, "Tdlpf_z", 6.0);
 	obs_data_set_default_double(settings, "att2_dB", -10);
+	obs_data_set_default_double(settings, "e_deadband_x", 1.5);
+	obs_data_set_default_double(settings, "e_deadband_y", 1.5);
+	obs_data_set_default_double(settings, "e_deadband_z", 2.0);
+	obs_data_set_default_double(settings, "e_nonlinear_x", 1.0);
+	obs_data_set_default_double(settings, "e_nonlinear_y", 1.0);
+	obs_data_set_default_double(settings, "e_nonlinear_z", 2.0);
 
 	obs_data_t *presets = obs_data_create();
 	obs_data_set_default_obj(settings, "presets", presets);
@@ -340,20 +349,19 @@ static void tick_filter(struct face_tracker_filter *s, float second)
 	f3 e = s->detect_err;
 	f3 e_int = e;
 	for (int i = 0; i < 3; i++) {
-		float x = e.v[i];
 		float d = srwh * s->e_deadband.v[i];
 		float n = srwh * s->e_nonlinear.v[i];
-		if (std::abs(x) <= d)
-			x = 0.0f;
-		else if (std::abs(x) < (d + n)) {
-			if (x > 0)
-				x = +sqf(x - d) / (2.0f * n);
-			else
-				x = -sqf(x - d) / (2.0f * n);
-		} else if (x > 0)
-			x -= d + n * 0.5f;
-		else
-			x += d + n * 0.5f;
+		const bool was_settled = s->settled[i];
+		float x = apply_control_deadband(e.v[i], d, n, s->settled[i]);
+		if (s->settled[i]) {
+			e_int.v[i] = 0.0f;
+			s->filter_int.v[i] = 0.0f;
+			if (!was_settled) {
+				/* Preserve the current crop while removing residual LPF motion. */
+				s->filter_int_out.v[i] += s->filter_lpf.v[i] * s->klpf.v[i];
+				s->filter_lpf.v[i] = 0.0f;
+			}
+		}
 		if (second * s->ki > 1.0e-10) {
 			if (s->filter_int.v[i] < 0.0f && e.v[i] > 0.0f)
 				e_int.v[i] = std::min(e.v[i], -s->filter_int.v[i] / (second * s->ki));
@@ -735,7 +743,7 @@ static inline std::shared_ptr<texture_object> surface_to_cvtex(struct face_track
 	uint32_t width = gs_stagesurface_get_width(s->stagesurface);
 	uint32_t height = gs_stagesurface_get_height(s->stagesurface);
 
-	std::shared_ptr<texture_object> cvtex(new texture_object);
+	auto cvtex = std::make_shared<texture_object>();
 	cvtex->scale = scale;
 	cvtex->tick = s->ftm->tick_cnt;
 
@@ -1012,6 +1020,26 @@ static void emit_state_changed(struct face_tracker_filter *s)
 	signal_handler_signal(sh, "state_changed", &cd);
 }
 
+static enum gs_color_space ftf_get_color_space(void *data, size_t count, const enum gs_color_space *preferred_spaces)
+{
+	auto *s = (struct face_tracker_filter *)data;
+	obs_source_t *target = NULL;
+	bool release_target = false;
+	if (obs_source_get_type(s->context) == OBS_SOURCE_TYPE_FILTER) {
+		target = obs_filter_get_target(s->context);
+	} else if (s->target_ref) {
+		target = obs_weak_source_get_source(s->target_ref);
+		release_target = true;
+	}
+
+	enum gs_color_space space = count && preferred_spaces ? preferred_spaces[0] : GS_CS_SRGB;
+	if (target)
+		space = obs_source_get_color_space(target, count, preferred_spaces);
+	if (release_target)
+		obs_source_release(target);
+	return space;
+}
+
 extern "C" void register_face_tracker_filter(bool hide_filter, bool hide_source)
 {
 	struct obs_source_info info = {};
@@ -1032,6 +1060,7 @@ extern "C" void register_face_tracker_filter(bool hide_filter, bool hide_source)
 	info.video_render = ftf_render;
 	info.get_width = ftf_width;
 	info.get_height = ftf_height;
+	info.video_get_color_space = ftf_get_color_space;
 	obs_register_source(&info);
 
 	info.id = "face_tracker_source";

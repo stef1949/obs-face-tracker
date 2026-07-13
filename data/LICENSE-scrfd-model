@@ -1,0 +1,12 @@
+SCRFD model notice
+==================
+
+The optional scrfd_2.5g_bnkps.onnx weights originate from the InsightFace
+SCRFD model family. InsightFace states that its pretrained models are available
+for non-commercial research purposes only. The plugin code does not grant any
+additional rights to those weights.
+
+Review the current upstream terms before redistributing or using the model:
+https://github.com/deepinsight/insightface#license
+
+The local development copy is pinned by SHA-256 in MODEL-MANIFEST.txt.

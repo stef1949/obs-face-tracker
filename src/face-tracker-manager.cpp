@@ -1,8 +1,17 @@
 #include <obs-module.h>
+#include <util/platform.h>
+#include <algorithm>
+#include <utility>
 #include "plugin-macros.generated.h"
 #include "face-tracker-manager.hpp"
 #include "face-detector-dlib-hog.h"
 #include "face-detector-dlib-cnn.h"
+#ifdef HAVE_YUNET
+#include "face-detector-yunet.h"
+#endif
+#ifdef HAVE_SCRFD
+#include "face-detector-scrfd.h"
+#endif
 #include "face-tracker-dlib.h"
 #include "texture-object.h"
 #include "helper.hpp"
@@ -16,6 +25,10 @@
 #define DIR_DLIB_HOG "dlib_hog_model"
 #define DIR_DLIB_CNN "dlib_cnn_model"
 #define DIR_DLIB_LANDMARK "dlib_face_landmark_model"
+#define DIR_YUNET "yunet_model"
+#define DIR_SCRFD "scrfd_model"
+
+static constexpr size_t max_idle_trackers = 2;
 
 face_tracker_manager::face_tracker_manager()
 {
@@ -24,13 +37,33 @@ face_tracker_manager::face_tracker_manager()
 	tracking_threshold = 1e-2f;
 	landmark_detection_data = NULL;
 	crop_cur.x0 = crop_cur.x1 = crop_cur.y0 = crop_cur.y1 = 0.0f;
-	tick_cnt = detect_tick = next_tick_stage_to_detector = 0;
+	tick_cnt = detect_tick = 0;
+	next_detection_ns = 0;
+	next_tracking_ns = 0;
+	target_lost_since_ns = 0;
+	selected_target_valid = false;
+	selected_target = rect_s{0, 0, 0, 0, 0.0f};
 	detector_in_progress = false;
+	reset_requested.store(false, std::memory_order_relaxed);
+	target_selection = target_selection_sticky;
+	detector_interval_ms = 2000;
+	detector_interval_lost_ms = 250;
+	tracker_interval_ms = 50;
+	target_stick_ms = 1500;
+	detector_gpu_device = 0;
+	yunet_score_threshold = 0.6f;
+	yunet_nms_threshold = 0.3f;
+	yunet_max_input_size = 320;
+	scrfd_score_threshold = 0.5f;
+	scrfd_nms_threshold = 0.4f;
+	scrfd_input_size = 640;
+	scrfd_use_cuda = true;
 	detect = NULL;
 }
 
 face_tracker_manager::~face_tracker_manager()
 {
+	std::lock_guard<std::mutex> guard(state_mutex);
 	for (auto &t : trackers_idlepool) {
 		if (t.tracker) {
 			t.tracker->stop();
@@ -58,6 +91,14 @@ inline void face_tracker_manager::retire_tracker(int ix)
 	trackers_idlepool.push_back(trackers[ix]);
 	trackers[ix].tracker->request_suspend();
 	trackers.erase(trackers.begin() + ix);
+	while (trackers_idlepool.size() > max_idle_trackers) {
+		auto &idle = trackers_idlepool.back();
+		if (idle.tracker) {
+			idle.tracker->stop();
+			delete idle.tracker;
+		}
+		trackers_idlepool.pop_back();
+	}
 }
 
 inline bool face_tracker_manager::is_low_confident(const tracker_inst_s &t, float th1)
@@ -78,13 +119,18 @@ void face_tracker_manager::remove_duplicated_tracker()
 			continue;
 
 		rect_s r = trackers[i].rect;
-		int a0 = (r.x1 - r.x0) * (r.y1 - r.y0);
-		int a_overlap_sum = 0;
+		float a0 = rect_area(r);
+		if (a0 <= 0.0f) {
+			retire_tracker((int)i);
+			i--;
+			continue;
+		}
+		float a_overlap_sum = 0.0f;
 		bool to_remove = false;
 		for (size_t j = i + 1; j < trackers.size() && !to_remove; j++) {
 			if (trackers[j].state != tracker_inst_s::tracker_state_available)
 				continue;
-			int a = common_area(r, trackers[j].rect);
+			float a = (float)common_area(r, trackers[j].rect);
 			a_overlap_sum += a;
 			if (a * 10 > a0 && a_overlap_sum * 2 > a0)
 				to_remove = true;
@@ -104,8 +150,12 @@ inline void face_tracker_manager::attenuate_tracker()
 			continue;
 		struct tracker_inst_s &t = trackers[i];
 
-		int a1 = (t.rect.x1 - t.rect.x0) * (t.rect.y1 - t.rect.y0);
-		float amax = (float)a1 * 0.1f;
+		float a1 = rect_area(t.rect);
+		if (a1 <= 0.0f) {
+			t.att = 0.0f;
+			continue;
+		}
+		float amax = a1 * 0.1f;
 		for (size_t j = 0; j < detect_rects.size(); j++) {
 			rect_s r = detect_rects[j];
 			float a = (float)common_area(r, t.rect);
@@ -153,7 +203,7 @@ inline void face_tracker_manager::copy_detector_to_tracker()
 
 	struct tracker_inst_s &t = trackers[i_tracker];
 
-	struct rect_s r = detect_rects[0];
+	struct rect_s r = detect_rects[select_rect(detect_rects)];
 	int w = r.x1 - r.x0;
 	int h = r.y1 - r.y0;
 	r.x0 -= w * upsize_l;
@@ -166,7 +216,7 @@ inline void face_tracker_manager::copy_detector_to_tracker()
 	t.state = tracker_inst_s::tracker_state_constructing;
 }
 
-inline void face_tracker_manager::stage_to_detector()
+inline void face_tracker_manager::stage_to_detector(const std::shared_ptr<texture_object> &cvtex)
 {
 	if (!detect || detect->trylock())
 		return;
@@ -182,23 +232,45 @@ inline void face_tracker_manager::stage_to_detector()
 		detector_in_progress = false;
 	}
 
-	if ((next_tick_stage_to_detector - tick_cnt) > 0) {
+	uint64_t now = os_gettime_ns();
+	if (now < next_detection_ns) {
 		detect->unlock();
 		return;
 	}
 
-	if (auto cvtex = get_cvtex()) {
+	if (cvtex) {
 		detect->set_texture(cvtex, detector_crop_l, detector_crop_r, detector_crop_t, detector_crop_b);
 		if (detector_engine == engine_dlib_hog) {
 			if (auto *d = dynamic_cast<face_detector_dlib_hog *>(detect))
 				d->set_model(detector_dlib_hog_model.c_str());
 		} else if (detector_engine == engine_dlib_cnn) {
-			if (auto *d = dynamic_cast<face_detector_dlib_cnn *>(detect))
+			if (auto *d = dynamic_cast<face_detector_dlib_cnn *>(detect)) {
 				d->set_model(detector_dlib_cnn_model.c_str());
+				d->set_gpu_device(detector_gpu_device);
+			}
 		}
+#ifdef HAVE_YUNET
+		else if (detector_engine == engine_yunet) {
+			if (auto *d = dynamic_cast<face_detector_yunet *>(detect)) {
+				d->set_model(detector_yunet_model.c_str());
+				d->set_config(yunet_score_threshold, yunet_nms_threshold, yunet_max_input_size);
+			}
+		}
+#endif
+#ifdef HAVE_SCRFD
+		else if (detector_engine == engine_scrfd) {
+			if (auto *d = dynamic_cast<face_detector_scrfd *>(detect)) {
+				d->set_model(detector_scrfd_model.c_str());
+				d->set_config(scrfd_score_threshold, scrfd_nms_threshold, scrfd_input_size,
+					      scrfd_use_cuda, detector_gpu_device);
+			}
+		}
+#endif
 		detect->signal();
 		detector_in_progress = true;
 		detect_tick = tick_cnt;
+		int interval_ms = tracker_rects.empty() ? detector_interval_lost_ms : detector_interval_ms;
+		next_detection_ns = now + (uint64_t)std::max(interval_ms, 50) * 1000000ULL;
 
 		struct tracker_inst_s t;
 		t.rect = rect_s{0, 0, 0, 0, 0.0f};
@@ -232,28 +304,25 @@ inline void face_tracker_manager::stage_to_detector()
 	detect->unlock();
 }
 
-inline int face_tracker_manager::stage_surface_to_tracker(struct tracker_inst_s &t)
+inline bool face_tracker_manager::stage_surface_to_tracker(struct tracker_inst_s &t,
+							   const std::shared_ptr<texture_object> &cvtex)
 {
-	if (auto cvtex = get_cvtex()) {
-		t.tracker->set_texture(cvtex);
-		t.crop_tracker = crop_cur;
-		t.tracker->signal();
-	} else
-		return 1;
-	return 0;
+	if (!cvtex)
+		return false;
+	t.tracker->set_texture(cvtex);
+	t.crop_tracker = crop_cur;
+	return true;
 }
 
-inline void face_tracker_manager::stage_to_trackers()
+inline void face_tracker_manager::stage_to_trackers(const std::shared_ptr<texture_object> &cvtex)
 {
 	bool have_new_tracker = false;
 	for (size_t i = 0; i < trackers.size(); i++) {
 		struct tracker_inst_s &t = trackers[i];
 		if (t.state == tracker_inst_s::tracker_state_constructing) {
 			if (!t.tracker->trylock()) {
-				if (!stage_surface_to_tracker(t)) {
-					t.crop_tracker = crop_cur;
-					t.state = tracker_inst_s::tracker_state_first_track;
-				}
+				if (stage_surface_to_tracker(t, cvtex))
+					t.tracker->signal();
 				t.tracker->unlock();
 				t.state = tracker_inst_s::tracker_state_first_track;
 			}
@@ -267,8 +336,8 @@ inline void face_tracker_manager::stage_to_trackers()
 				t.score_first = t.rect.score;
 				if (!ret || !landmark_detection_data || !t.tracker->get_landmark(t.landmark))
 					t.landmark.resize(0);
-				stage_surface_to_tracker(t);
-				t.tracker->signal();
+				if (stage_surface_to_tracker(t, cvtex))
+					t.tracker->signal();
 				t.tracker->unlock();
 				if (ret) {
 					t.state = tracker_inst_s::tracker_state_available;
@@ -284,8 +353,8 @@ inline void face_tracker_manager::stage_to_trackers()
 					    t.landmark.size());
 				if (!ret || !landmark_detection_data || !t.tracker->get_landmark(t.landmark))
 					t.landmark.resize(0);
-				stage_surface_to_tracker(t);
-				t.tracker->signal();
+				if (stage_surface_to_tracker(t, cvtex))
+					t.tracker->signal();
 				t.tracker->unlock();
 			}
 		}
@@ -295,8 +364,13 @@ inline void face_tracker_manager::stage_to_trackers()
 		remove_duplicated_tracker();
 }
 
-static inline void make_tracker_rects(std::vector<face_tracker_manager::tracker_rect_s> &tracker_rects,
-				      const std::deque<face_tracker_manager::tracker_inst_s> &trackers)
+size_t face_tracker_manager::select_rect(const std::vector<rect_s> &rects) const
+{
+	return select_rect_index(rects, (enum rect_selection_policy)target_selection, selected_target_valid,
+				 selected_target, crop_cur);
+}
+
+void face_tracker_manager::update_tracker_rects()
 {
 	size_t n = 0;
 	for (size_t i = 0; i < trackers.size(); i++) {
@@ -320,29 +394,85 @@ static inline void make_tracker_rects(std::vector<face_tracker_manager::tracker_
 
 	if (tracker_rects.size() > n)
 		tracker_rects.resize(n);
+
+	uint64_t now = os_gettime_ns();
+	if (tracker_rects.empty()) {
+		if (!target_lost_since_ns) {
+			target_lost_since_ns = now;
+			next_detection_ns = 0;
+		}
+		if (now - target_lost_since_ns > (uint64_t)std::max(target_stick_ms, 0) * 1000000ULL)
+			selected_target_valid = false;
+		return;
+	}
+
+	target_lost_since_ns = 0;
+	std::vector<rect_s> rects;
+	rects.reserve(tracker_rects.size());
+	for (const auto &tracker : tracker_rects)
+		rects.push_back(tracker.rect);
+	size_t selected = select_rect(rects);
+	tracker_rect_s target = std::move(tracker_rects[selected]);
+	tracker_rects.clear();
+	tracker_rects.push_back(std::move(target));
+	selected_target = tracker_rects[0].rect;
+	selected_target_valid = true;
 }
 
 void face_tracker_manager::tick(float second)
 {
-	if (reset_requested) {
-		for (int i = trackers.size() - 1; i >= 0; i--)
-			trackers[i].att = 0.0f;
+	std::lock_guard<std::mutex> guard(state_mutex);
+	(void)second;
+	if (reset_requested.exchange(false, std::memory_order_acq_rel)) {
+		for (auto &tracker : trackers)
+			tracker.att = 0.0f;
 		detect_rects.clear();
-		reset_requested = false;
+		selected_target_valid = false;
+		target_lost_since_ns = 0;
+		next_detection_ns = 0;
+		next_tracking_ns = 0;
 	}
-
-	if (detect_tick == tick_cnt)
-		next_tick_stage_to_detector = tick_cnt + (int)(2.0f / second); // detect for each _ second(s).
 
 	tick_cnt += 1;
 
-	make_tracker_rects(tracker_rects, trackers);
+	update_tracker_rects();
 }
 
 void face_tracker_manager::post_render()
 {
-	stage_to_detector();
-	stage_to_trackers();
+	std::lock_guard<std::mutex> guard(state_mutex);
+	uint64_t now = os_gettime_ns();
+	if (now < next_tracking_ns)
+		return;
+	next_tracking_ns = interval_deadline_ns(now, tracker_interval_ms);
+
+	// Harvest completed work before deciding whether another CPU frame is
+	// needed. This avoids GPU readback while the detector is busy or sleeping.
+	stage_to_detector(nullptr);
+	stage_to_trackers(nullptr);
+	bool tracker_needs_frame = std::any_of(trackers.begin(), trackers.end(), [](const tracker_inst_s &tracker) {
+		return tracker.state == tracker_inst_s::tracker_state_first_track ||
+		       tracker.state == tracker_inst_s::tracker_state_available;
+	});
+	bool detector_needs_frame = detect && !detector_in_progress && now >= next_detection_ns;
+	if (!tracker_needs_frame && !detector_needs_frame)
+		return;
+
+	// Capturing a filter frame requires a GPU-to-CPU transfer. Capture once and
+	// share the immutable frame between the detector and every active tracker.
+	auto cvtex = get_cvtex();
+	if (!cvtex) {
+		next_tracking_ns = 0;
+		return;
+	}
+	stage_to_detector(cvtex);
+	stage_to_trackers(cvtex);
+}
+
+bool face_tracker_manager::frame_due() const
+{
+	std::lock_guard<std::mutex> guard(state_mutex);
+	return os_gettime_ns() >= next_tracking_ns;
 }
 
 static void update_detector(face_tracker_manager *ftm, enum face_tracker_manager::detector_engine_e detector_engine)
@@ -360,6 +490,16 @@ static void update_detector(face_tracker_manager *ftm, enum face_tracker_manager
 	case face_tracker_manager::engine_dlib_cnn:
 		ftm->detect = new face_detector_dlib_cnn();
 		break;
+#ifdef HAVE_YUNET
+	case face_tracker_manager::engine_yunet:
+		ftm->detect = new face_detector_yunet();
+		break;
+#endif
+#ifdef HAVE_SCRFD
+	case face_tracker_manager::engine_scrfd:
+		ftm->detect = new face_detector_scrfd();
+		break;
+#endif
 	default:
 		blog(LOG_ERROR, "unknown detector_engine %d", (int)detector_engine);
 	}
@@ -372,20 +512,67 @@ static void update_detector(face_tracker_manager *ftm, enum face_tracker_manager
 
 void face_tracker_manager::update(obs_data_t *settings)
 {
+	std::lock_guard<std::mutex> guard(state_mutex);
 	upsize_l = obs_data_get_double(settings, "upsize_l");
 	upsize_r = obs_data_get_double(settings, "upsize_r");
 	upsize_t = obs_data_get_double(settings, "upsize_t");
 	upsize_b = obs_data_get_double(settings, "upsize_b");
-	scale = obs_data_get_double(settings, "scale");
+	scale.store((float)obs_data_get_double(settings, "scale"), std::memory_order_release);
 	auto _detector_engine = (enum detector_engine_e)obs_data_get_int(settings, "detector_engine");
-	if (_detector_engine != detector_engine)
+#ifndef HAVE_YUNET
+	if (_detector_engine == engine_yunet)
+		_detector_engine = engine_dlib_cnn;
+#endif
+#ifndef HAVE_SCRFD
+	if (_detector_engine == engine_scrfd)
+		_detector_engine = engine_dlib_cnn;
+#endif
+	if (_detector_engine != engine_dlib_hog && _detector_engine != engine_dlib_cnn
+#ifdef HAVE_YUNET
+	    && _detector_engine != engine_yunet
+#endif
+#ifdef HAVE_SCRFD
+	    && _detector_engine != engine_scrfd
+#endif
+	) {
+		blog(LOG_WARNING, "invalid detector engine %d; falling back to dlib HOG", (int)_detector_engine);
+		_detector_engine = engine_dlib_hog;
+	}
+	if (_detector_engine != detector_engine) {
 		update_detector(this, _detector_engine);
+		detector_in_progress = false;
+		detect_rects.clear();
+		next_detection_ns = 0;
+		next_tracking_ns = 0;
+		for (size_t i = trackers.size(); i-- > 0;) {
+			if (trackers[i].state == tracker_inst_s::tracker_state_reset_texture)
+				retire_tracker((int)i);
+		}
+	}
 	detector_dlib_hog_model = obs_data_get_string(settings, "detector_dlib_hog_model");
 	detector_dlib_cnn_model = obs_data_get_string(settings, "detector_dlib_cnn_model");
+	detector_yunet_model = obs_data_get_string(settings, "detector_yunet_model");
+	detector_scrfd_model = obs_data_get_string(settings, "detector_scrfd_model");
+	yunet_score_threshold = std::clamp((float)obs_data_get_double(settings, "yunet_score_threshold"), 0.01f, 0.99f);
+	yunet_nms_threshold = std::clamp((float)obs_data_get_double(settings, "yunet_nms_threshold"), 0.01f, 0.99f);
+	yunet_max_input_size = std::clamp((int)obs_data_get_int(settings, "yunet_max_input_size"), 160, 1280);
+	scrfd_score_threshold = std::clamp((float)obs_data_get_double(settings, "scrfd_score_threshold"), 0.01f, 0.99f);
+	scrfd_nms_threshold = std::clamp((float)obs_data_get_double(settings, "scrfd_nms_threshold"), 0.01f, 0.99f);
+	scrfd_input_size = std::clamp((int)obs_data_get_int(settings, "scrfd_input_size"), 160, 1280);
+	scrfd_use_cuda = obs_data_get_bool(settings, "scrfd_use_cuda");
+	detector_gpu_device = (int)obs_data_get_int(settings, "detector_gpu_device");
 	detector_crop_l = obs_data_get_int(settings, "detector_crop_l");
 	detector_crop_r = obs_data_get_int(settings, "detector_crop_r");
 	detector_crop_t = obs_data_get_int(settings, "detector_crop_t");
 	detector_crop_b = obs_data_get_int(settings, "detector_crop_b");
+	int selection = (int)obs_data_get_int(settings, "target_selection");
+	if (selection < (int)target_selection_sticky || selection > (int)target_selection_first)
+		selection = (int)target_selection_sticky;
+	target_selection = (enum target_selection_e)selection;
+	detector_interval_ms = std::clamp((int)obs_data_get_int(settings, "detector_interval_ms"), 100, 10000);
+	detector_interval_lost_ms = std::clamp((int)obs_data_get_int(settings, "detector_interval_lost_ms"), 50, 5000);
+	tracker_interval_ms = std::clamp((int)obs_data_get_int(settings, "tracker_interval_ms"), 16, 250);
+	target_stick_ms = std::clamp((int)obs_data_get_int(settings, "target_stick_ms"), 0, 10000);
 	bool landmark_detection = obs_data_get_bool(settings, "landmark_detection");
 	bfree(landmark_detection_data);
 	landmark_detection_data = NULL;
@@ -410,40 +597,138 @@ void face_tracker_manager::get_properties(obs_properties_t *pp)
 	obs_property_t *p;
 	std::string data_path = obs_get_module_data_path(obs_current_module());
 
-	obs_properties_add_float(pp, "upsize_l", obs_module_text("Left"), -0.4, 4.0, 0.2);
-	obs_properties_add_float(pp, "upsize_r", obs_module_text("Right"), -0.4, 4.0, 0.2);
-	obs_properties_add_float(pp, "upsize_t", obs_module_text("Top"), -0.4, 4.0, 0.2);
-	obs_properties_add_float(pp, "upsize_b", obs_module_text("Bottom"), -0.4, 4.0, 0.2);
-	obs_properties_add_float(pp, "scale", obs_module_text("Scale image"), 1.0, 16.0, 1.0);
-	p = obs_properties_add_list(pp, "detector_engine", obs_module_text("Detector"), OBS_COMBO_TYPE_LIST,
-				    OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(p, obs_module_text("Detector.dlib.hog"), (int)engine_dlib_hog);
-	obs_property_list_add_int(p, obs_module_text("Detector.dlib.cnn"), (int)engine_dlib_cnn);
-	obs_properties_add_path(pp, "detector_dlib_hog_model", obs_module_text("Dlib HOG model"), OBS_PATH_FILE,
-				"Data Files (*.dat);;"
-				"All Files (*.*)",
-				(data_path + "/" DIR_DLIB_CNN).c_str());
-	obs_properties_add_path(pp, "detector_dlib_cnn_model", obs_module_text("Dlib CNN model"), OBS_PATH_FILE,
-				"Data Files (*.dat);;"
-				"All Files (*.*)",
-				(data_path + "/" DIR_DLIB_CNN).c_str());
-	obs_properties_add_int(pp, "detector_crop_l", obs_module_text("Crop left for detector"), 0, 1920, 1);
-	obs_properties_add_int(pp, "detector_crop_r", obs_module_text("Crop right for detector"), 0, 1920, 1);
-	obs_properties_add_int(pp, "detector_crop_t", obs_module_text("Crop top for detector"), 0, 1080, 1);
-	obs_properties_add_int(pp, "detector_crop_b", obs_module_text("Crop bottom for detector"), 0, 1080, 1);
-	obs_properties_add_bool(pp, "landmark_detection", obs_module_text("Enable landmark detection"));
-	p = obs_properties_add_path(pp, "landmark_detection_data", obs_module_text("Landmark detection data"),
-				    OBS_PATH_FILE,
-				    "Data Files (*.dat);;"
-				    "All Files (*.*)",
-				    (data_path + "/" DIR_DLIB_LANDMARK).c_str());
-	obs_property_set_long_description(
-		p, obs_module_text("You can get the shape_predictor_68_face_landmarks.dat file from: "
-				   "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"));
-	p = obs_properties_add_bool(pp, "tracking_th_en", obs_module_text("Set tracking threshold"));
-	obs_property_set_modified_callback(p, tracking_th_en_modified);
-	p = obs_properties_add_float(pp, "tracking_th_dB", obs_module_text("Tracking threshold"), -120.0, -20.0, 5.0);
-	obs_property_float_set_suffix(p, " dB");
+	{
+		obs_properties_t *group = obs_properties_create();
+		p = obs_properties_add_list(group, "detector_engine", obs_module_text("Detector"), OBS_COMBO_TYPE_LIST,
+					    OBS_COMBO_FORMAT_INT);
+		obs_property_list_add_int(p, obs_module_text("Detector.dlib.hog"), (int)engine_dlib_hog);
+		obs_property_list_add_int(p, obs_module_text("Detector.dlib.cnn"), (int)engine_dlib_cnn);
+#ifdef HAVE_YUNET
+		obs_property_list_add_int(p, obs_module_text("Detector.yunet"), (int)engine_yunet);
+#endif
+#ifdef HAVE_SCRFD
+		obs_property_list_add_int(p, obs_module_text("Detector.scrfd"), (int)engine_scrfd);
+#endif
+
+		p = obs_properties_add_list(group, "detector_gpu_device", obs_module_text("GPU.Device"),
+					    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		auto gpu_devices = face_detector_dlib_cnn::get_gpu_device_names();
+		if (gpu_devices.empty()) {
+#ifdef HAVE_SCRFD
+			obs_property_list_add_int(p, obs_module_text("GPU.Default"), 0);
+#else
+			obs_property_list_add_int(p, obs_module_text("GPU.Unavailable"), -1);
+			obs_property_set_enabled(p, false);
+#endif
+		} else {
+			for (size_t i = 0; i < gpu_devices.size(); i++) {
+				std::string label = std::to_string(i) + ": " + gpu_devices[i];
+				obs_property_list_add_int(p, label.c_str(), (long long)i);
+			}
+		}
+
+#ifdef HAVE_SCRFD
+		obs_properties_add_bool(group, "scrfd_use_cuda", obs_module_text("SCRFD.UseCUDA"));
+		obs_properties_add_float_slider(group, "scrfd_score_threshold", obs_module_text("SCRFD.ScoreThreshold"),
+						0.01, 0.99, 0.01);
+		obs_properties_add_float_slider(group, "scrfd_nms_threshold", obs_module_text("SCRFD.NmsThreshold"),
+						0.01, 0.99, 0.01);
+		obs_properties_add_int(group, "scrfd_input_size", obs_module_text("SCRFD.InputSize"), 160, 1280, 32);
+		obs_properties_add_path(group, "detector_scrfd_model", obs_module_text("SCRFD.Model"), OBS_PATH_FILE,
+					"ONNX Models (*.onnx);;"
+					"All Files (*.*)",
+					(data_path + "/" DIR_SCRFD).c_str());
+#endif
+#ifdef HAVE_YUNET
+		obs_properties_add_float_slider(group, "yunet_score_threshold", obs_module_text("YuNet.ScoreThreshold"),
+						0.01, 0.99, 0.01);
+		obs_properties_add_float_slider(group, "yunet_nms_threshold", obs_module_text("YuNet.NmsThreshold"),
+						0.01, 0.99, 0.01);
+		obs_properties_add_int(group, "yunet_max_input_size", obs_module_text("YuNet.MaxInputSize"), 160, 1280,
+				       32);
+		obs_properties_add_path(group, "detector_yunet_model", obs_module_text("YuNet.Model"), OBS_PATH_FILE,
+					"ONNX Models (*.onnx);;"
+					"All Files (*.*)",
+					(data_path + "/" DIR_YUNET).c_str());
+#endif
+
+		obs_properties_add_path(group, "detector_dlib_hog_model", obs_module_text("Dlib HOG model"),
+					OBS_PATH_FILE,
+					"Data Files (*.dat);;"
+					"All Files (*.*)",
+					(data_path + "/" DIR_DLIB_HOG).c_str());
+		obs_properties_add_path(group, "detector_dlib_cnn_model", obs_module_text("Dlib CNN model"),
+					OBS_PATH_FILE,
+					"Data Files (*.dat);;"
+					"All Files (*.*)",
+					(data_path + "/" DIR_DLIB_CNN).c_str());
+		obs_properties_add_group(pp, "detector_settings", obs_module_text("Group.Detector"), OBS_GROUP_NORMAL,
+					 group);
+	}
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		p = obs_properties_add_list(group, "target_selection", obs_module_text("TargetSelection"),
+					    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		obs_property_list_add_int(p, obs_module_text("TargetSelection.Sticky"), (int)target_selection_sticky);
+		obs_property_list_add_int(p, obs_module_text("TargetSelection.Largest"), (int)target_selection_largest);
+		obs_property_list_add_int(p, obs_module_text("TargetSelection.Center"), (int)target_selection_center);
+		obs_property_list_add_int(p, obs_module_text("TargetSelection.First"), (int)target_selection_first);
+		p = obs_properties_add_int(group, "target_stick_ms", obs_module_text("TargetSelection.Hold"), 0, 10000,
+					   100);
+		obs_property_int_set_suffix(p, " ms");
+		p = obs_properties_add_bool(group, "tracking_th_en", obs_module_text("Set tracking threshold"));
+		obs_property_set_modified_callback(p, tracking_th_en_modified);
+		p = obs_properties_add_float(group, "tracking_th_dB", obs_module_text("Tracking threshold"), -120.0,
+					     -20.0, 5.0);
+		obs_property_float_set_suffix(p, " dB");
+		obs_properties_add_group(pp, "subject_tracking", obs_module_text("Group.SubjectTracking"),
+					 OBS_GROUP_NORMAL, group);
+	}
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		obs_properties_add_float(group, "scale", obs_module_text("Scale image"), 1.0, 16.0, 1.0);
+		obs_properties_add_float(group, "upsize_l", obs_module_text("Left"), -0.4, 4.0, 0.2);
+		obs_properties_add_float(group, "upsize_r", obs_module_text("Right"), -0.4, 4.0, 0.2);
+		obs_properties_add_float(group, "upsize_t", obs_module_text("Top"), -0.4, 4.0, 0.2);
+		obs_properties_add_float(group, "upsize_b", obs_module_text("Bottom"), -0.4, 4.0, 0.2);
+		obs_properties_add_int(group, "detector_crop_l", obs_module_text("Crop left for detector"), 0, 1920, 1);
+		obs_properties_add_int(group, "detector_crop_r", obs_module_text("Crop right for detector"), 0, 1920, 1);
+		obs_properties_add_int(group, "detector_crop_t", obs_module_text("Crop top for detector"), 0, 1080, 1);
+		obs_properties_add_int(group, "detector_crop_b", obs_module_text("Crop bottom for detector"), 0, 1080, 1);
+		obs_properties_add_group(pp, "detection_area", obs_module_text("Group.DetectionArea"), OBS_GROUP_NORMAL,
+					 group);
+	}
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		p = obs_properties_add_int(group, "detector_interval_ms", obs_module_text("DetectionInterval.Tracking"),
+					   100, 10000, 50);
+		obs_property_int_set_suffix(p, " ms");
+		p = obs_properties_add_int(group, "detector_interval_lost_ms",
+					   obs_module_text("DetectionInterval.Searching"), 50, 5000, 50);
+		obs_property_int_set_suffix(p, " ms");
+		p = obs_properties_add_int(group, "tracker_interval_ms", obs_module_text("TrackingInterval"), 16, 250,
+					   1);
+		obs_property_int_set_suffix(p, " ms");
+		obs_properties_add_group(pp, "timing_performance", obs_module_text("Group.TimingPerformance"),
+					 OBS_GROUP_NORMAL, group);
+	}
+
+	{
+		obs_properties_t *group = obs_properties_create();
+		obs_properties_add_bool(group, "landmark_detection", obs_module_text("Enable landmark detection"));
+		p = obs_properties_add_path(group, "landmark_detection_data", obs_module_text("Landmark detection data"),
+					    OBS_PATH_FILE,
+					    "Data Files (*.dat);;"
+					    "All Files (*.*)",
+					    (data_path + "/" DIR_DLIB_LANDMARK).c_str());
+		obs_property_set_long_description(
+			p, obs_module_text("You can get the shape_predictor_68_face_landmarks.dat file from: "
+					   "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"));
+		obs_properties_add_group(pp, "landmarks", obs_module_text("Group.Landmarks"), OBS_GROUP_NORMAL, group);
+	}
 }
 
 void face_tracker_manager::get_defaults(obs_data_t *settings)
@@ -455,6 +740,22 @@ void face_tracker_manager::get_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, "scale", 2.0);
 	obs_data_set_default_bool(settings, "tracking_th_en", true);
 	obs_data_set_default_double(settings, "tracking_th_dB", -80.0);
+	obs_data_set_default_int(settings, "target_selection", (int)target_selection_sticky);
+	obs_data_set_default_int(settings, "detector_interval_ms", 2000);
+	obs_data_set_default_int(settings, "detector_interval_lost_ms", 250);
+	obs_data_set_default_int(settings, "tracker_interval_ms", 50);
+	obs_data_set_default_int(settings, "target_stick_ms", 1500);
+	obs_data_set_default_int(settings, "detector_gpu_device", 0);
+	obs_data_set_default_double(settings, "yunet_score_threshold", 0.6);
+	obs_data_set_default_double(settings, "yunet_nms_threshold", 0.3);
+	obs_data_set_default_int(settings, "yunet_max_input_size", 320);
+	obs_data_set_default_double(settings, "scrfd_score_threshold", 0.5);
+	obs_data_set_default_double(settings, "scrfd_nms_threshold", 0.4);
+	obs_data_set_default_int(settings, "scrfd_input_size", 640);
+	obs_data_set_default_bool(settings, "scrfd_use_cuda", true);
+#ifdef HAVE_YUNET
+	obs_data_set_default_int(settings, "detector_engine", (int)engine_yunet);
+#endif
 
 	if (char *f = obs_module_file(DIR_DLIB_HOG "/frontal_face_detector.dat")) {
 		obs_data_set_default_string(settings, "detector_dlib_hog_model", f);
@@ -469,6 +770,25 @@ void face_tracker_manager::get_defaults(obs_data_t *settings)
 	} else {
 		blog(LOG_ERROR, "mmod_human_face_detector.dat is not found in the data directory.");
 	}
+
+#ifdef HAVE_YUNET
+	if (char *f = obs_module_file(DIR_YUNET "/face_detection_yunet_2026may.onnx")) {
+		obs_data_set_default_string(settings, "detector_yunet_model", f);
+		bfree(f);
+	} else {
+		blog(LOG_ERROR, "face_detection_yunet_2026may.onnx is not found in the data directory.");
+	}
+#endif
+
+#ifdef HAVE_SCRFD
+	if (char *f = obs_module_file(DIR_SCRFD "/scrfd_2.5g_bnkps.onnx")) {
+		obs_data_set_default_string(settings, "detector_scrfd_model", f);
+		obs_data_set_default_int(settings, "detector_engine", (int)engine_scrfd);
+		bfree(f);
+	} else {
+		blog(LOG_WARNING, "scrfd_2.5g_bnkps.onnx is not found; select an SCRFD ONNX model in properties.");
+	}
+#endif
 
 	if (char *f = obs_module_file(DIR_DLIB_LANDMARK "/shape_predictor_5_face_landmarks.dat")) {
 		obs_data_set_default_string(settings, "landmark_detection_data", f);

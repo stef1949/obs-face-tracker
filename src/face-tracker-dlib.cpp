@@ -1,6 +1,7 @@
 #include <obs-module.h>
 #include <util/platform.h>
 #include <util/threading.h>
+#include <utility>
 #include "plugin-macros.generated.h"
 #include "texture-object.h"
 #include "face-tracker-dlib.h"
@@ -47,13 +48,14 @@ face_tracker_dlib::face_tracker_dlib()
 
 face_tracker_dlib::~face_tracker_dlib()
 {
+	stop();
 	bfree(p->landmark_detection_data);
 	if (p->tracker)
 		delete p->tracker;
 	delete p;
 }
 
-void face_tracker_dlib::set_texture(std::shared_ptr<texture_object> &tex)
+void face_tracker_dlib::set_texture(const std::shared_ptr<texture_object> &tex)
 {
 	p->tex = tex;
 	p->n_track = 0;
@@ -101,7 +103,8 @@ template<typename Tx, typename Ta> inline Tx internal_division(Tx x0, Tx x1, Ta 
 
 void face_tracker_dlib::track_main()
 {
-	if (!p->tex)
+	auto tex = std::move(p->tex);
+	if (!tex)
 		return;
 
 	uint64_t ns = os_gettime_ns();
@@ -109,46 +112,46 @@ void face_tracker_dlib::track_main()
 		if (!p->tracker)
 			p->tracker = new dlib::correlation_tracker();
 
-		dlib::matrix<dlib::rgb_pixel> img;
-		if (!p->tex->get_dlib_rgb_image(img))
+		auto img = tex->get_dlib_rgb_image();
+		if (!img)
 			return;
 
 		dlib::rectangle r(p->rect.x0, p->rect.y0, p->rect.x1, p->rect.y1);
-		p->tracker->start_track(img, r);
-		p->tracker_nc = img.nc();
-		p->tracker_nr = img.nr();
+		p->tracker->start_track(*img, r);
+		p->tracker_nc = img->nc();
+		p->tracker_nr = img->nr();
 		p->score0 = p->rect.score;
 		p->need_restart = false;
 		p->pslr_max = 0.0f;
 		p->pslr_min = 1e9f;
-		p->scale_orig = p->tex->scale;
+		p->scale_orig = tex->scale;
 		p->shape = dlib::full_object_detection();
-	} else if (p->tex->scale != p->scale_orig) {
+	} else if (tex->scale != p->scale_orig) {
 		p->rect.score = 0.0f;
 	} else {
-		dlib::matrix<dlib::rgb_pixel> img;
-		if (!p->tex->get_dlib_rgb_image(img))
+		auto img = tex->get_dlib_rgb_image();
+		if (!img)
 			return;
 
-		if (img.nc() != p->tracker_nc || img.nr() != p->tracker_nr) {
+		if (img->nc() != p->tracker_nc || img->nr() != p->tracker_nr) {
 			blog(LOG_ERROR,
 			     "face_tracker_dlib::track_main: cannot run correlation-tracker with different image size %dx%d, expected %dx%d",
-			     (int)img.nc(), (int)img.nr(), p->tracker_nc, p->tracker_nr);
+			     (int)img->nc(), (int)img->nr(), p->tracker_nc, p->tracker_nr);
 			p->rect.score = 0;
 			p->n_track += 1; // to return score=0
 			return;
 		}
 
-		float s = p->tracker->update(img);
+		float s = p->tracker->update(*img);
 		if (s > p->pslr_max)
 			p->pslr_max = s;
 		if (s < p->pslr_min)
 			p->pslr_min = s;
 		dlib::rectangle r = p->tracker->get_position();
-		p->rect.x0 = r.left() * p->tex->scale;
-		p->rect.y0 = r.top() * p->tex->scale;
-		p->rect.x1 = r.right() * p->tex->scale;
-		p->rect.y1 = r.bottom() * p->tex->scale;
+		p->rect.x0 = r.left() * tex->scale;
+		p->rect.y0 = r.top() * tex->scale;
+		p->rect.x1 = r.right() * tex->scale;
+		p->rect.y1 = r.bottom() * tex->scale;
 		s = p->pslr_max / p->pslr_min * ((ns - p->last_ns) * 1e-9f);
 		p->rect.score = (p->rect.score /*+ 0.0f*s */) / (1.0f + s);
 		p->n_track += 1;
@@ -173,13 +176,11 @@ void face_tracker_dlib::track_main()
 				internal_division(r.top(), r.bottom(), p->upsize.y0 + 1.0f, p->upsize.y1));
 
 			if (p->sp_available)
-				p->shape = p->sp(img, r_face);
-			p->last_scale = p->tex->scale;
+				p->shape = p->sp(*img, r_face);
+			p->last_scale = tex->scale;
 		}
 	}
 	p->last_ns = ns;
-
-	p->tex.reset();
 }
 
 bool face_tracker_dlib::get_face(struct rect_s &rect)

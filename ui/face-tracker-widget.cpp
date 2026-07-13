@@ -99,6 +99,11 @@ void FTWidget::CreateDisplay()
 		return;
 	}
 	data->disp = obs_display_create(&info, 0);
+	if (!data->disp) {
+		blog(LOG_ERROR, "FTWidget %p: obs_display_create failed", this);
+		return;
+	}
+	obs_display_update_color_space(data->disp);
 	obs_display_add_draw_callback(data->disp, draw, data);
 #ifdef HAVE_DISPLAY_SET_INTERLEAVE
 	blog(LOG_INFO, "calling obs_display_set_interleave interleave=2");
@@ -110,6 +115,8 @@ void FTWidget::resizeEvent(QResizeEvent *event)
 {
 	QWidget::resizeEvent(event);
 	CreateDisplay();
+	if (!data->disp)
+		return;
 
 	QSize size = GetPixelSize(this);
 	obs_display_resize(data->disp, size.width(), size.height());

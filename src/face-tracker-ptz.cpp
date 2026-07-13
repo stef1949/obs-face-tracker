@@ -6,6 +6,8 @@
 #include "plugin-macros.generated.h"
 #include "texture-object.h"
 #include <algorithm>
+#include <mutex>
+#include <utility>
 #include <graphics/matrix4.h>
 #include <media-io/video-scaler.h>
 #include "helper.hpp"
@@ -33,6 +35,7 @@ class ft_manager_for_ftptz : public face_tracker_manager {
 public:
 	struct face_tracker_ptz *ctx;
 	std::shared_ptr<texture_object> cvtex_cache;
+	std::mutex cvtex_mutex;
 	enum ptz_cmd_state_e ptz_last_cmd;
 	class ptz_backend *dev;
 
@@ -64,7 +67,17 @@ public:
 
 	~ft_manager_for_ftptz() { release_dev(); }
 
-	std::shared_ptr<texture_object> get_cvtex() override { return cvtex_cache; };
+	std::shared_ptr<texture_object> get_cvtex() override
+	{
+		std::lock_guard<std::mutex> lock(cvtex_mutex);
+		return cvtex_cache;
+	}
+
+	void set_cvtex(std::shared_ptr<texture_object> cvtex)
+	{
+		std::lock_guard<std::mutex> lock(cvtex_mutex);
+		cvtex_cache = std::move(cvtex);
+	}
 };
 
 static const char *ftptz_get_name(void *unused)
@@ -183,7 +196,7 @@ static void ftptz_update(void *data, obs_data_t *settings)
 	auto *s = (struct face_tracker_ptz *)data;
 
 	s->ftm->update(settings);
-	s->ftm->scale = roundf(s->ftm->scale);
+	s->ftm->scale.store(roundf(s->ftm->scale.load(std::memory_order_acquire)), std::memory_order_release);
 	s->track_z = obs_data_get_double(settings, "track_z");
 	s->track_x = obs_data_get_double(settings, "track_x");
 	s->track_y = obs_data_get_double(settings, "track_y");
@@ -326,6 +339,8 @@ static bool ftptz_reset_tracking(obs_properties_t *, obs_property_t *, void *dat
 	s->detect_err = f3(0, 0, 0);
 	s->filter_int = f3(0, 0, 0);
 	s->filter_lpf = f3(0, 0, 0);
+	for (bool &axis : s->settled)
+		axis = false;
 	s->ftm->reset_requested = true;
 
 	return true;
@@ -367,28 +382,7 @@ static obs_properties_t *ftptz_properties(void *data)
 	obs_properties_add_button(props, "ftptz_reset_tracking", obs_module_text("Reset tracking"),
 				  ftptz_reset_tracking);
 
-	{
-		obs_properties_t *pp = obs_properties_create();
-		obs_property_t *p = obs_properties_add_list(pp, "preset_name", obs_module_text("Preset"),
-							    OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
-		obs_data_t *settings = obs_source_get_settings(s->context);
-		if (settings) {
-			ftf_preset_item_to_list(p, settings);
-			obs_data_release(settings);
-		}
-		obs_properties_add_button(pp, "preset_load", obs_module_text("Load preset"), ftf_preset_load);
-		obs_properties_add_button(pp, "preset_save", obs_module_text("Save preset"), ftf_preset_save);
-		obs_properties_add_button(pp, "preset_delete", obs_module_text("Delete preset"), ftf_preset_delete);
-		obs_properties_add_bool(pp, "preset_mask_track", obs_module_text("Save and load tracking parameters"));
-		obs_properties_add_bool(pp, "preset_mask_control", obs_module_text("Save and load control parameters"));
-		obs_properties_add_group(props, "preset_grp", obs_module_text("Preset"), OBS_GROUP_NORMAL, pp);
-	}
-
-	{
-		obs_properties_t *pp = obs_properties_create();
-		face_tracker_manager::get_properties(pp);
-		obs_properties_add_group(props, "ftm", obs_module_text("Face detection options"), OBS_GROUP_NORMAL, pp);
-	}
+	face_tracker_manager::get_properties(props);
 
 	{
 		obs_properties_t *pp = obs_properties_create();
@@ -458,6 +452,23 @@ static obs_properties_t *ftptz_properties(void *data)
 
 	{
 		obs_properties_t *pp = obs_properties_create();
+		obs_property_t *p = obs_properties_add_list(pp, "preset_name", obs_module_text("Preset"),
+						    OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+		obs_data_t *settings = obs_source_get_settings(s->context);
+		if (settings) {
+			ftf_preset_item_to_list(p, settings);
+			obs_data_release(settings);
+		}
+		obs_properties_add_button(pp, "preset_load", obs_module_text("Load preset"), ftf_preset_load);
+		obs_properties_add_button(pp, "preset_save", obs_module_text("Save preset"), ftf_preset_save);
+		obs_properties_add_button(pp, "preset_delete", obs_module_text("Delete preset"), ftf_preset_delete);
+		obs_properties_add_bool(pp, "preset_mask_track", obs_module_text("Save and load tracking parameters"));
+		obs_properties_add_bool(pp, "preset_mask_control", obs_module_text("Save and load control parameters"));
+		obs_properties_add_group(props, "preset_grp", obs_module_text("Preset"), OBS_GROUP_NORMAL, pp);
+	}
+
+	{
+		obs_properties_t *pp = obs_properties_create();
 		obs_properties_add_bool(pp, "debug_faces", "Show face detection results");
 		obs_properties_add_bool(pp, "debug_always_show", "Always show information (useful for demo)");
 #ifdef ENABLE_DEBUG_DATA
@@ -496,6 +507,12 @@ static void ftptz_get_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, "Tdlpf", 2.0);
 	obs_data_set_default_double(settings, "Tdlpf_z", 6.0);
 	obs_data_set_default_double(settings, "Tatt_int", 2.0);
+	obs_data_set_default_double(settings, "e_deadband_x", 1.5);
+	obs_data_set_default_double(settings, "e_deadband_y", 1.5);
+	obs_data_set_default_double(settings, "e_deadband_z", 2.0);
+	obs_data_set_default_double(settings, "e_nonlinear_x", 1.0);
+	obs_data_set_default_double(settings, "e_nonlinear_y", 1.0);
+	obs_data_set_default_double(settings, "e_nonlinear_z", 2.0);
 
 	obs_data_set_default_double(settings, "face_lost_preset_timeout", 5.0);
 	obs_data_set_default_int(settings, "face_lost_ptz_preset", -1);
@@ -685,20 +702,16 @@ static void tick_filter(struct face_tracker_ptz *s, float second)
 	f3 e = s->detect_err;
 	f3 e_int = e;
 	for (int i = 0; i < 3; i++) {
-		float x = e.v[i];
 		float d = srwh * s->e_deadband.v[i];
 		float n = srwh * s->e_nonlinear.v[i];
-		if (std::abs(x) <= d)
-			x = 0.0f;
-		else if (std::abs(x) < (d + n)) {
-			if (x > 0)
-				x = +sqf(x - d) / (2.0f * n);
-			else
-				x = -sqf(x - d) / (2.0f * n);
-		} else if (x > 0)
-			x -= d + n * 0.5f;
-		else
-			x += d + n * 0.5f;
+		const bool was_settled = s->settled[i];
+		float x = apply_control_deadband(e.v[i], d, n, s->settled[i]);
+		if (s->settled[i]) {
+			e_int.v[i] = 0.0f;
+			s->filter_int.v[i] = 0.0f;
+			if (!was_settled)
+				s->filter_lpf.v[i] = 0.0f;
+		}
 		if (second * s->ki.v[i] > 1.0e-10) {
 			if (s->filter_int.v[i] < 0.0f && e.v[i] > 0.0f)
 				e_int.v[i] = std::min(e.v[i], -s->filter_int.v[i] / (second * s->ki.v[i]));
@@ -949,7 +962,8 @@ static inline bool operator!=(const struct video_scale_info &a, const struct vid
 	return false;
 }
 
-static bool scale_set_texture(struct face_tracker_ptz *s, texture_object *cvtex, struct obs_source_frame *frame)
+static bool scale_set_texture(struct face_tracker_ptz *s, texture_object *cvtex, struct obs_source_frame *frame,
+			      float scale)
 {
 	const struct video_scale_info scaler_src_info = {
 		frame->format,    frame->width,
@@ -958,8 +972,8 @@ static bool scale_set_texture(struct face_tracker_ptz *s, texture_object *cvtex,
 	};
 	const struct video_scale_info scaler_dst_info = {
 		VIDEO_FORMAT_BGRX,
-		(uint32_t)(frame->width / s->ftm->scale),
-		(uint32_t)(frame->height / s->ftm->scale),
+		std::max((uint32_t)(frame->width / scale), 1U),
+		std::max((uint32_t)(frame->height / scale), 1U),
 		scaler_src_info.range,
 		VIDEO_CS_DEFAULT,
 	};
@@ -967,7 +981,7 @@ static bool scale_set_texture(struct face_tracker_ptz *s, texture_object *cvtex,
 
 	if (!s->scaler || scaler_src_info != s->scaler_src_info || scaler_dst_info != s->scaler_dst_info) {
 		blog(LOG_DEBUG, "creating video-scaler: width=%u height=%u scale=%f -> %ux%u", frame->width,
-		     frame->height, s->ftm->scale, scaler_dst_info.width, scaler_dst_info.height);
+		     frame->height, scale, scaler_dst_info.width, scaler_dst_info.height);
 
 		video_scaler_destroy(s->scaler);
 		s->scaler = NULL;
@@ -1011,28 +1025,29 @@ static struct obs_source_frame *ftptz_filter_video(void *data, struct obs_source
 		return NULL;
 
 	auto *s = (struct face_tracker_ptz *)data;
-
-	std::shared_ptr<texture_object> cvtex(new texture_object());
-	cvtex->scale = s->ftm->scale;
-	cvtex->tick = s->ftm->tick_cnt;
-
-	if (is_rgb_format(frame->format)) {
-		cvtex->set_texture_obsframe(frame, s->ftm->scale);
-	} else {
-		if (!scale_set_texture(s, cvtex.get(), frame))
-			return frame;
-	}
-
+	const float current_scale = std::max(s->ftm->scale.load(std::memory_order_acquire), 1.0f);
 	s->known_width = frame->width;
 	s->known_height = frame->height;
-	s->ftm->cvtex_cache.swap(cvtex);
 	s->ftm->crop_cur.x0 = 0;
 	s->ftm->crop_cur.y0 = 0;
 	s->ftm->crop_cur.x1 = frame->width;
 	s->ftm->crop_cur.y1 = frame->height;
-
 	s->rendered = true;
+	if (!s->ftm->frame_due())
+		return frame;
 
+	auto cvtex = std::make_shared<texture_object>();
+	cvtex->scale = current_scale;
+	cvtex->tick = s->ftm->tick_cnt;
+
+	if (is_rgb_format(frame->format)) {
+		cvtex->set_texture_obsframe(frame, (int)current_scale);
+	} else {
+		if (!scale_set_texture(s, cvtex.get(), frame, current_scale))
+			return frame;
+	}
+
+	s->ftm->set_cvtex(std::move(cvtex));
 	s->ftm->post_render();
 	return frame;
 }
