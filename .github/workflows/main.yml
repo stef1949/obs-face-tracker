@@ -341,7 +341,7 @@ jobs:
           path: |
             .deps/onnxruntime-gpu-cuda12
             .deps/cuda12-runtime
-          key: windows-cuda12-ort-1.26.0-runtime-20260731-v1
+          key: windows-cuda12-ort-1.28.0-runtime-20260731-v1
 
       - name: Materialize CUDA dependencies
         run: |
@@ -395,7 +395,7 @@ jobs:
           path: |
             .deps/onnxruntime-gpu-cuda12
             .deps/cuda12-runtime
-          key: windows-cuda12-ort-1.26.0-runtime-20260731-v1
+          key: windows-cuda12-ort-1.28.0-runtime-20260731-v1
 
       - name: Download ONNX Runtime CUDA 12
         run: |
@@ -467,6 +467,7 @@ jobs:
             'release\obs-plugins\64bit\nvrtc-builtins64_129.dll'
             'release\data\obs-plugins\obs-face-tracker\yunet_model\face_detection_yunet_2026may.onnx'
             'release\data\obs-plugins\obs-face-tracker\scrfd_model\scrfd_2.5g_bnkps.onnx'
+            'release\data\obs-plugins\obs-face-tracker\scrfd_model\scrfd_10g_bnkps.onnx'
             'release\data\obs-plugins\obs-face-tracker\LICENSE-yunet'
             'release\data\obs-plugins\obs-face-tracker\LICENSE-scrfd-model'
             'release\data\obs-plugins\obs-face-tracker\LICENSE.onnxruntime'

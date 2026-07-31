@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.12)
 
-project(obs-face-tracker VERSION 0.9.1)
-set(PLUGIN_AUTHOR "Norihiro Kamae")
+project(obs-face-tracker VERSION 1.0.1)
+set(PLUGIN_AUTHOR "Steph Ritchie")
 set(MACOS_BUNDLEID "net.nagater.obs-face-tracker")
 set(MACOS_PACKAGE_UUID "A2EB2F73-9828-40C4-A307-F47282BB8D3F")
 set(MACOS_INSTALLER_UUID "652CF739-5A6F-4DAC-9611-B068FAC15BF3")
 set(PLUGIN_URL "https://obsproject.com/forum/resources/face-tracker.1294/")
-set(LINUX_MAINTAINER_EMAIL "norihiro@nagater.net")
+set(LINUX_MAINTAINER_EMAIL "admin@richies.uk")
 
 option(WITH_PTZ_TCP "Enable to connect PTZ camera through TCP socket" ON)
 option(WITH_DLIB_SUBMODULE "Link dlib from submodule" ON)
@@ -381,6 +381,13 @@ if(BUILD_TESTING)
 			COMMAND ${CMAKE_PROJECT_NAME}-scrfd-model-test
 				"${CMAKE_CURRENT_SOURCE_DIR}/data/scrfd_model/scrfd_2.5g_bnkps.onnx"
 		)
+		if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/scrfd_model/scrfd_10g_bnkps.onnx")
+			add_test(
+				NAME ${CMAKE_PROJECT_NAME}-scrfd-10g-model
+				COMMAND ${CMAKE_PROJECT_NAME}-scrfd-model-test
+					"${CMAKE_CURRENT_SOURCE_DIR}/data/scrfd_model/scrfd_10g_bnkps.onnx"
+			)
+		endif()
 		if(OS_WINDOWS)
 			add_custom_command(
 				TARGET ${CMAKE_PROJECT_NAME}-scrfd-model-test POST_BUILD

@@ -75,6 +75,7 @@ $requiredDllPatterns = @(
     'cublasLt64_12.dll'
     'nvblas64_12.dll'
     'cufft64_11.dll'
+    'cufftw64_11.dll'
     'curand64_10.dll'
     'cudnn64_9.dll'
     'cudnn_adv64_9.dll'

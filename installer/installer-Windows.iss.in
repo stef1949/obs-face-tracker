@@ -16,9 +16,16 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={code:GetDirName}
 DefaultGroupName={#MyAppName}
+DisableDirPage=auto
+DisableProgramGroupPage=yes
 OutputBaseFilename={#MyAppName}-{#MyAppVersion}-Windows-Installer
 Compression=lzma
 SolidCompression=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=admin
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

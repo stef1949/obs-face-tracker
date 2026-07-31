@@ -5,26 +5,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$version = '1.26.0'
+$version = '1.28.0'
 if ($GpuCuda12 -and $GpuCuda13) {
     throw 'Choose only one GPU runtime: -GpuCuda12 or -GpuCuda13.'
 }
 if ($GpuCuda12) {
-    $expectedHash = '1133B1BCB0FB6F82B1C5B470B7CC15F9080A58B27DBC7B579A1FD63125EC2A15'
-    $archiveName = "onnxruntime-win-x64-gpu-$version.zip"
+    $expectedHash = '6B7BF16D6D30180DB7F386FB179AA4E4F1313F0924531A2879B7B090B56518C1'
+    $archiveName = "onnxruntime-win-x64-gpu_cuda12-$version.zip"
     $packageUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$version/$archiveName"
     if (-not $OutputDir) {
         $OutputDir = "$PSScriptRoot\..\..\.deps\onnxruntime-gpu-cuda12"
     }
 } elseif ($GpuCuda13) {
-    $expectedHash = '4FA096030EE766B2E590D71FB6676BBD00595C92AB87ACF497FE075E98834D8B'
+    $expectedHash = '137F0822A4923B1D84D3E09496E0792EBBB221EB3A61A0657F71A12AB68AB1E2'
     $archiveName = "onnxruntime-win-x64-gpu_cuda13-$version.zip"
     $packageUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$version/$archiveName"
     if (-not $OutputDir) {
         $OutputDir = "$PSScriptRoot\..\..\.deps\onnxruntime-gpu-cuda13"
     }
 } else {
-    $expectedHash = '50CC3772668F04B8373AD65A36793F94699BC4E818F6E691FC68F1578C38CE42'
+    $expectedHash = '769D1D3EA8AB6CD69F737C9DD4D4462AA4AD0CCFA106EAF506EFC40D7BEAD5DB'
     $archiveName = "Microsoft.ML.OnnxRuntime.$version.zip"
     $packageUrl = "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/$version"
     if (-not $OutputDir) {
@@ -33,7 +33,7 @@ if ($GpuCuda12) {
 }
 
 if ($GpuCuda12 -or $GpuCuda13) {
-    $runtimeRoot = Join-Path $OutputDir "onnxruntime-win-x64-gpu-$version"
+    $runtimeRoot = Join-Path $OutputDir ([System.IO.Path]::GetFileNameWithoutExtension($archiveName))
     $requiredFiles = @(
         'include\onnxruntime_cxx_api.h'
         'lib\onnxruntime.lib'
@@ -44,6 +44,7 @@ if ($GpuCuda12 -or $GpuCuda13) {
 } else {
     $runtimeRoot = $OutputDir
     $requiredFiles = @(
+        'Microsoft.ML.OnnxRuntime.nuspec'
         'build\native\include\onnxruntime_cxx_api.h'
         'runtimes\win-x64\native\onnxruntime.lib'
         'runtimes\win-x64\native\onnxruntime.dll'
@@ -56,6 +57,11 @@ foreach ($requiredFile in $requiredFiles) {
         $cachedRuntimeComplete = $false
         break
     }
+}
+if ($cachedRuntimeComplete -and -not ($GpuCuda12 -or $GpuCuda13)) {
+    $nuspecPath = Join-Path $runtimeRoot 'Microsoft.ML.OnnxRuntime.nuspec'
+    $versionPattern = '<version>' + [regex]::Escape($version) + '</version>'
+    $cachedRuntimeComplete = Select-String -LiteralPath $nuspecPath -Pattern $versionPattern -Quiet
 }
 if ($cachedRuntimeComplete) {
     Write-Output (Resolve-Path -LiteralPath $runtimeRoot).Path

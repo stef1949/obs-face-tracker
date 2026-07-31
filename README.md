@@ -65,15 +65,19 @@ for the current limitations of the PTZ control feature.
 
 The standard Windows installer and package ZIP are the CUDA build. They include
 ONNX Runtime CUDA 12, the required CUDA 12 and cuDNN 9 runtime DLLs, YuNet,
-SCRFD-2.5G, and both model files. You do not need to install the CUDA Toolkit,
-cuDNN, ONNX Runtime, or detector models separately. Because those GPU libraries
-are prepackaged, the installer is substantially larger than a CPU-only plugin.
-YuNet remains the default for new Face Tracker sources; select SCRFD under
-**Detector and model** and leave **Use CUDA for SCRFD** enabled for NVIDIA GPU
-acceleration. SCRFD automatically falls back to its CPU provider if CUDA cannot
-initialize.
+SCRFD-2.5G, SCRFD-10G, and all three detector model files. You do not need to
+install the CUDA Toolkit, cuDNN, ONNX Runtime, or detector models separately.
+Because those GPU libraries are prepackaged, the installer is substantially
+larger than a CPU-only plugin. YuNet remains the default for new Face Tracker
+sources; select SCRFD under **Detector and model** and leave **Use CUDA for
+SCRFD** enabled for NVIDIA GPU acceleration. SCRFD-2.5G remains the recommended
+real-time preset. SCRFD-10G is more accurate but performs about four times the
+model computation and can substantially increase GPU usage, VRAM use, power
+draw, and OBS rendering latency. The settings panel displays a warning whenever
+10G is selected. SCRFD automatically falls back to its CPU provider if CUDA
+cannot initialize.
 
-The packaged SCRFD model is subject to InsightFace's non-commercial research
+The packaged SCRFD models are subject to InsightFace's non-commercial research
 terms; review `LICENSE-scrfd-model` in the installed plugin data directory
 before use.
 
@@ -91,15 +95,25 @@ before use.
    installation, select the folder that contains `bin\64bit\obs64.exe`.
    Do not select the `bin` or `bin\64bit` folder itself.
 6. Complete the installer. This installs the plugin, CUDA runtime libraries,
-   cuDNN, ONNX Runtime, YuNet, SCRFD, and both detector models into the OBS
+   cuDNN, ONNX Runtime, YuNet, SCRFD, and all three detector models into the OBS
    directory; it does not modify a system-wide CUDA installation.
 7. Start OBS Studio.
 8. Confirm the plugin appears by opening the **Sources** add menu and looking
    for **Face Tracker**, or by opening a video source's **Filters** window and
    looking for **Face Tracker** under **Effect Filters**.
 9. Add or open a Face Tracker source/filter. Under **Detector and model**,
-   confirm both **YuNet** and **SCRFD** are available. Select **SCRFD**, enable
-   **Use CUDA for SCRFD**, and choose the desired NVIDIA device.
+   confirm both **YuNet** and **SCRFD** are available. On a supported NVIDIA
+   device, **SCRFD** and **Use CUDA for SCRFD** are selected automatically;
+   choose another detected GPU here if required. Leave **SCRFD model** on
+   **2.5G** for normal real-time use, or select **10G** for higher accuracy after
+   reviewing the high-GPU-usage warning.
+
+The installer is a single, self-contained package. It always carries the CPU
+and CUDA detector files so it never needs to download a model or NVIDIA runtime
+during setup. On a new Face Tracker source, a CUDA 12-capable Turing-or-newer
+NVIDIA GPU automatically selects SCRFD with CUDA. Other systems default to
+YuNet; SCRFD remains available with its CPU fallback. Existing source settings
+are not changed during an upgrade.
 
 ### Windows ZIP (manual installation)
 
@@ -121,6 +135,7 @@ before use.
    data\obs-plugins\obs-face-tracker\locale\en-US.ini
    data\obs-plugins\obs-face-tracker\yunet_model\face_detection_yunet_2026may.onnx
    data\obs-plugins\obs-face-tracker\scrfd_model\scrfd_2.5g_bnkps.onnx
+   data\obs-plugins\obs-face-tracker\scrfd_model\scrfd_10g_bnkps.onnx
    ```
 
    For a standard installation, the DLL's full path is
@@ -236,10 +251,11 @@ detector.
 
 ### SCRFD ONNX detector
 
-SCRFD-2.5G is a higher-accuracy ONNX detector. Standard Windows releases use
-the CUDA build and include the CUDA 12 provider with automatic CPU fallback.
-For a source build on Windows, download the pinned ONNX Runtime and NVIDIA
-runtime bundles, then enable both ONNX detectors:
+SCRFD is the higher-accuracy ONNX detector. Standard Windows releases package
+both the recommended real-time 2.5G model and the higher-accuracy 10G model,
+use the CUDA build, and include the CUDA 12 provider with automatic CPU
+fallback. For a source build on Windows, download the pinned ONNX Runtime and
+NVIDIA runtime bundles, then enable both ONNX detectors:
 
 ```powershell
 $ort = (& powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -268,7 +284,9 @@ provider if CUDA cannot initialise. Keep
 `ENABLE_CUDA=OFF` unless the legacy dlib CNN detector also needs CUDA; this
 avoids loading two independent cuDNN clients into OBS. `SCRFD input size`
 controls the square input for dynamic-shape models. Fixed-shape models override
-it; the included SCRFD-2.5G model uses 640x640.
+it; both included SCRFD models use 640x640. The 10G model has roughly four times
+the computation of 2.5G. It should be treated as an optional quality preset,
+particularly when OBS is also encoding or applying other GPU-heavy filters.
 
 `CUDNN_RUNTIME_DIR`, `CUDA_RUNTIME_DIRS`, and `CUDA_RUNTIME_NOTICE_DIR` make the
 Windows package self-contained. The plugin explicitly preloads cuDNN's split
@@ -276,9 +294,13 @@ runtime libraries from its own binary directory before creating the CUDA
 session, which is required when OBS loads a plugin outside the process search
 path.
 
-The repository and standard Windows packages include
-`data/scrfd_model/scrfd_2.5g_bnkps.onnx` with SHA-256
-`bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce`.
+The repository and standard Windows packages include the following models:
+
+- `data/scrfd_model/scrfd_2.5g_bnkps.onnx`, SHA-256
+  `bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce`.
+- `data/scrfd_model/scrfd_10g_bnkps.onnx`, SHA-256
+  `5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91`.
+
 InsightFace limits its pretrained models to non-commercial research use, so the
 standard model updater does not download or replace SCRFD automatically.
 Review `data/LICENSE-scrfd-model` and the current upstream terms before use or
