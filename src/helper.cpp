@@ -58,8 +58,8 @@ bool preload_cudnn_runtime_libraries()
 			for (const std::wstring &name : pending) {
 				std::wstring path = directory + name;
 				HMODULE module = LoadLibraryExW(path.c_str(), nullptr,
-							LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-								LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+								LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+									LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 				if (module) {
 					modules.push_back(module);
 					made_progress = true;
@@ -74,8 +74,9 @@ bool preload_cudnn_runtime_libraries()
 		for (const std::wstring &name : pending) {
 			std::wstring path = directory + name;
 			SetLastError(ERROR_SUCCESS);
-			HMODULE module = LoadLibraryExW(path.c_str(), nullptr,
-						LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+			HMODULE module =
+				LoadLibraryExW(path.c_str(), nullptr,
+					       LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 			if (module) {
 				modules.push_back(module);
 			} else {

@@ -216,7 +216,7 @@ static obs_properties_t *ft_properties(void *data, bool include_input)
 	if (include_input) {
 		obs_properties_t *pp = obs_properties_create();
 		obs_property_t *p = obs_properties_add_list(pp, "target_name", obs_module_text("Source"),
-						    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+							    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 		property_list_add_sources(p, s ? s->context : NULL);
 		obs_properties_add_group(props, "input", obs_module_text("Input"), OBS_GROUP_NORMAL, pp);
 	}
@@ -272,7 +272,7 @@ static obs_properties_t *ft_properties(void *data, bool include_input)
 	{
 		obs_properties_t *pp = obs_properties_create();
 		obs_property_t *p = obs_properties_add_list(pp, "preset_name", obs_module_text("Preset"),
-						    OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+							    OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
 		obs_data_t *settings = obs_source_get_settings(s->context);
 		if (settings) {
 			ftf_preset_item_to_list(p, settings);
