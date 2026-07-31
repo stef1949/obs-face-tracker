@@ -331,25 +331,35 @@ jobs:
   windows_cuda_dependencies:
     name: Prepare Windows CUDA dependencies
     runs-on: windows-2022
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore CUDA runtime cache
+      - name: Restore ONNX Runtime CUDA 12 cache
         uses: actions/cache@v4
         with:
-          path: |
-            .deps/onnxruntime-gpu-cuda12
-            .deps/cuda12-runtime
-          key: windows-cuda12-ort-1.28.0-runtime-20260731-v1
+          path: .deps/onnxruntime-gpu-cuda12
+          key: windows-onnxruntime-gpu-cuda12-1.28.0-v1
 
-      - name: Materialize CUDA dependencies
+      - name: Restore CUDA 12 runtime cache
+        uses: actions/cache@v4
+        with:
+          path: .deps/cuda12-runtime
+          key: windows-cuda12-runtime-20260731-v1
+
+      - name: Materialize ONNX Runtime CUDA 12
+        timeout-minutes: 15
         run: |
           & powershell.exe -NoProfile -ExecutionPolicy Bypass `
             -File .\ci\windows\download-onnxruntime.ps1 -GpuCuda12
           if ($LASTEXITCODE -ne 0) {
             throw "ONNX Runtime downloader failed with exit code $LASTEXITCODE"
           }
+
+      - name: Materialize CUDA 12 and cuDNN runtime
+        timeout-minutes: 30
+        run: |
           & powershell.exe -NoProfile -ExecutionPolicy Bypass `
             -File .\ci\windows\download-cuda12-runtime.ps1
           if ($LASTEXITCODE -ne 0) {
@@ -389,13 +399,17 @@ jobs:
           set -ex
           DESTDIR='./' ci/download-dlib-models.sh
 
-      - name: Restore CUDA runtime cache
+      - name: Restore ONNX Runtime CUDA 12 cache
         uses: actions/cache@v4
         with:
-          path: |
-            .deps/onnxruntime-gpu-cuda12
-            .deps/cuda12-runtime
-          key: windows-cuda12-ort-1.28.0-runtime-20260731-v1
+          path: .deps/onnxruntime-gpu-cuda12
+          key: windows-onnxruntime-gpu-cuda12-1.28.0-v1
+
+      - name: Restore CUDA 12 runtime cache
+        uses: actions/cache@v4
+        with:
+          path: .deps/cuda12-runtime
+          key: windows-cuda12-runtime-20260731-v1
 
       - name: Download ONNX Runtime CUDA 12
         run: |
