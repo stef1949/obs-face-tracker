@@ -37,6 +37,7 @@ for %%F in (
 	"release\obs-plugins\64bit\nvrtc-builtins64_129.dll"
 	"release\data\obs-plugins\%PluginName%\yunet_model\face_detection_yunet_2026may.onnx"
 	"release\data\obs-plugins\%PluginName%\scrfd_model\scrfd_2.5g_bnkps.onnx"
+	"release\data\obs-plugins\%PluginName%\scrfd_model\scrfd_10g_bnkps.onnx"
 	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\CUDA-RUNTIME-MANIFEST.txt"
 	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-cublas-cu12.txt"
 	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-cuda-nvrtc-cu12.txt"

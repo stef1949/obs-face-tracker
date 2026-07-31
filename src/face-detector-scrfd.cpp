@@ -18,9 +18,74 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 constexpr uint64_t error_retry_ns = 5ULL * 1000ULL * 1000ULL * 1000ULL;
 constexpr size_t max_candidates = 5000;
+
+#ifdef _WIN32
+// The packaged cuDNN 9.24 CUDA 12 runtime supports Turing and newer GPUs
+// (compute capability 7.5+), and CUDA 12 requires a CUDA 12-capable driver.
+constexpr int minimum_cuda_driver_version = 12000;
+constexpr int minimum_compute_capability = 75;
+
+std::vector<std::pair<int, std::string>> enumerate_supported_cuda_devices()
+{
+	std::vector<std::pair<int, std::string>> devices;
+	HMODULE driver = LoadLibraryExW(L"nvcuda.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+	if (!driver)
+		return devices;
+
+	using cu_init_fn = int(WINAPI *)(unsigned int);
+	using cu_driver_get_version_fn = int(WINAPI *)(int *);
+	using cu_device_get_count_fn = int(WINAPI *)(int *);
+	using cu_device_get_fn = int(WINAPI *)(int *, int);
+	using cu_device_get_name_fn = int(WINAPI *)(char *, int, int);
+	using cu_device_compute_capability_fn = int(WINAPI *)(int *, int *, int);
+
+	auto cu_init = reinterpret_cast<cu_init_fn>(GetProcAddress(driver, "cuInit"));
+	auto cu_driver_get_version =
+		reinterpret_cast<cu_driver_get_version_fn>(GetProcAddress(driver, "cuDriverGetVersion"));
+	auto cu_device_get_count = reinterpret_cast<cu_device_get_count_fn>(GetProcAddress(driver, "cuDeviceGetCount"));
+	auto cu_device_get = reinterpret_cast<cu_device_get_fn>(GetProcAddress(driver, "cuDeviceGet"));
+	auto cu_device_get_name = reinterpret_cast<cu_device_get_name_fn>(GetProcAddress(driver, "cuDeviceGetName"));
+	auto cu_device_compute_capability =
+		reinterpret_cast<cu_device_compute_capability_fn>(GetProcAddress(driver, "cuDeviceComputeCapability"));
+
+	int driver_version = 0;
+	int device_count = 0;
+	bool initialized = cu_init && cu_driver_get_version && cu_device_get_count && cu_device_get &&
+			   cu_device_get_name && cu_device_compute_capability && cu_init(0) == 0 &&
+			   cu_driver_get_version(&driver_version) == 0 &&
+			   driver_version >= minimum_cuda_driver_version && cu_device_get_count(&device_count) == 0;
+	if (initialized) {
+		for (int ordinal = 0; ordinal < device_count; ordinal++) {
+			int device = 0;
+			int major = 0;
+			int minor = 0;
+			std::array<char, 256> name = {};
+			if (cu_device_get(&device, ordinal) != 0 ||
+			    cu_device_compute_capability(&major, &minor, device) != 0 ||
+			    major * 10 + minor < minimum_compute_capability ||
+			    cu_device_get_name(name.data(), (int)name.size(), device) != 0)
+				continue;
+			devices.emplace_back(ordinal, name.data());
+		}
+	}
+
+	FreeLibrary(driver);
+	return devices;
+}
+#endif
 
 struct candidate_s
 {
@@ -102,6 +167,20 @@ face_detector_scrfd::~face_detector_scrfd()
 {
 	stop();
 	delete p;
+}
+
+std::vector<std::pair<int, std::string>> face_detector_scrfd::get_cuda_devices()
+{
+#if defined(_WIN32) && defined(HAVE_ONNXRUNTIME_CUDA)
+	static const std::vector<std::pair<int, std::string>> devices = enumerate_supported_cuda_devices();
+	return devices;
+#elif defined(HAVE_ONNXRUNTIME_CUDA)
+	// The self-contained installer is Windows-only. Preserve the previous
+	// default-device behaviour for custom CUDA builds on other platforms.
+	return {{0, "Default NVIDIA GPU"}};
+#else
+	return {};
+#endif
 }
 
 void face_detector_scrfd::set_texture(const std::shared_ptr<texture_object> &tex, int crop_l, int crop_r, int crop_t,

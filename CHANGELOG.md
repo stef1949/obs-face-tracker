@@ -10,7 +10,7 @@ from 1 November 2025, after the upstream 0.9.1 release.
 ### Highlights
 
 - Added two ONNX Runtime detector backends: the lightweight YuNet CPU detector
-  and the higher-accuracy SCRFD-2.5G detector with NVIDIA CUDA acceleration.
+  and higher-accuracy SCRFD 2.5G/10G detectors with NVIDIA CUDA acceleration.
 - Reduced CPU work and GPU readback by scheduling detection and correlation
   tracking independently, sharing one captured frame between consumers, and
   skipping frame conversion when no worker needs an update.
@@ -49,6 +49,9 @@ from 1 November 2025, after the upstream 0.9.1 release.
     initialized, and logs the active ONNX Runtime version and provider.
   - Retries failed model/session creation after a delay to prevent log spam and
     repeated expensive initialization.
+  - Adds packaged 2.5G and 10G model presets while preserving custom ONNX model
+    paths from existing scenes. The 10G preset displays a high-GPU-usage warning
+    and 2.5G remains the default.
 - Added explicit loading of cuDNN 9's split runtime libraries from the plugin
   binary directory on Windows. This fixes CUDA session startup when OBS loads
   the plugin from a directory that is not on the process DLL search path.
@@ -60,7 +63,8 @@ from 1 November 2025, after the upstream 0.9.1 release.
   - dlib CNN face detector;
   - dlib 5-point landmark predictor;
   - YuNet 2026 May ONNX model;
-  - SCRFD-2.5G ONNX model.
+  - SCRFD-2.5G ONNX model;
+  - SCRFD-10G ONNX model from the official InsightFace v0.7 buffalo_l pack.
 - Added model and third-party license files plus a manifest containing source
   revisions and SHA-256 checksums.
 - Documented that the included InsightFace SCRFD weights are subject to
@@ -194,7 +198,7 @@ from 1 November 2025, after the upstream 0.9.1 release.
 - Added Windows packaging for ONNX Runtime, CUDA runtime, cuBLAS, cuFFT,
   cuRAND, NVRTC, nvJitLink, and cuDNN DLLs, including validation that required
   runtime files exist.
-- Added a checksum-pinned PowerShell downloader for ONNX Runtime 1.26.0 CPU,
+- Added a checksum-pinned PowerShell downloader for ONNX Runtime 1.28.0 CPU,
   CUDA 12, and CUDA 13 packages.
 - Added a checksum-pinned, resumable NVIDIA CUDA 12 and cuDNN 9 runtime
   downloader that collects the Windows DLLs and their license notices for
@@ -218,13 +222,20 @@ from 1 November 2025, after the upstream 0.9.1 release.
   through CI secrets.
 - Added SHA-256 output for Windows archives and installers.
 - Standard Windows CI packages now compile YuNet and SCRFD, bundle pinned ONNX
-  Runtime CUDA 12, CUDA 12, cuDNN 9, both model files, and NVIDIA license
-  notices, and verify the complete GPU detector runtime before packaging.
+  Runtime CUDA 12, CUDA 12, cuDNN 9, all three detector model files, and NVIDIA
+  license notices, and verify the complete GPU detector runtime before packaging.
+- New Face Tracker sources now detect CUDA 12/cuDNN 9-compatible NVIDIA GPUs
+  through the installed display driver and automatically select SCRFD with
+  CUDA. Unsupported systems default to YuNet while retaining SCRFD's CPU
+  fallback, so the same self-contained installer works on either class of PC.
+- Simplified the normal Windows setup path by auto-detecting the existing OBS
+  directory, hiding the unused program-group page, and closing OBS before its
+  plugin files are replaced.
 - Tagged builds now create or update a GitHub Release, upload every platform
   package and installer, and attach a consolidated `SHA256SUMS.txt`.
-- YuNet remains the default for new sources when both ONNX detectors are
-  packaged; SCRFD is selectable with CUDA enabled by default and automatically
-  falls back to its single-threaded CPU provider if GPU initialization fails.
+- YuNet remains the default for new sources without a supported CUDA device.
+  CUDA-capable systems default to SCRFD, which automatically falls back to its
+  single-threaded CPU provider if GPU initialization fails.
 
 ### Tests and continuous integration
 
@@ -259,3 +270,5 @@ from 1 November 2025, after the upstream 0.9.1 release.
 - Installed the CUDA build into OBS Studio 32.1.0 and verified live face
   tracking, settings layout, cuDNN runtime preload, SCRFD model loading, and the
   ONNX Runtime 1.26 CUDA provider on GPU 0.
+- Rebuilt against ONNX Runtime 1.28.0 and passed YuNet CPU and SCRFD CUDA model
+  smoke tests on an NVIDIA GeForce RTX 5080.

@@ -15,6 +15,11 @@ public:
 		engine_scrfd = 3,
 		engine_uninitialized = -1,
 	};
+	enum scrfd_model_variant_e {
+		scrfd_model_2_5g = 0,
+		scrfd_model_10g = 1,
+		scrfd_model_custom = 2,
+	};
 	enum target_selection_e {
 		target_selection_sticky = 0,
 		target_selection_largest = 1,
@@ -59,6 +64,7 @@ public: // properties
 	std::string detector_dlib_cnn_model;
 	std::string detector_yunet_model;
 	std::string detector_scrfd_model;
+	enum scrfd_model_variant_e scrfd_model_variant;
 	float yunet_score_threshold;
 	float yunet_nms_threshold;
 	int yunet_max_input_size;

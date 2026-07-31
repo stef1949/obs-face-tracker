@@ -58,6 +58,7 @@ face_tracker_manager::face_tracker_manager()
 	scrfd_nms_threshold = 0.4f;
 	scrfd_input_size = 640;
 	scrfd_use_cuda = true;
+	scrfd_model_variant = scrfd_model_2_5g;
 	detect = NULL;
 }
 
@@ -552,7 +553,30 @@ void face_tracker_manager::update(obs_data_t *settings)
 	detector_dlib_hog_model = obs_data_get_string(settings, "detector_dlib_hog_model");
 	detector_dlib_cnn_model = obs_data_get_string(settings, "detector_dlib_cnn_model");
 	detector_yunet_model = obs_data_get_string(settings, "detector_yunet_model");
-	detector_scrfd_model = obs_data_get_string(settings, "detector_scrfd_model");
+	const std::string legacy_scrfd_model = obs_data_get_string(settings, "detector_scrfd_model");
+	const std::string packaged_scrfd_2_5g = obs_data_get_string(settings, "detector_scrfd_2_5g_model");
+	const std::string packaged_scrfd_10g = obs_data_get_string(settings, "detector_scrfd_10g_model");
+	int scrfd_variant = (int)obs_data_get_int(settings, "scrfd_model_variant");
+	if (!obs_data_has_user_value(settings, "scrfd_model_variant") &&
+	    obs_data_has_user_value(settings, "detector_scrfd_model") &&
+	    legacy_scrfd_model != packaged_scrfd_2_5g) {
+		scrfd_variant = (int)scrfd_model_custom;
+		obs_data_set_int(settings, "scrfd_model_variant", scrfd_variant);
+	}
+	if (scrfd_variant < (int)scrfd_model_2_5g || scrfd_variant > (int)scrfd_model_custom)
+		scrfd_variant = (int)scrfd_model_2_5g;
+	bool activating_scrfd_10g = scrfd_model_variant != scrfd_model_10g &&
+				       scrfd_variant == (int)scrfd_model_10g;
+	scrfd_model_variant = (enum scrfd_model_variant_e)scrfd_variant;
+	if (activating_scrfd_10g) {
+		blog(LOG_WARNING,
+		     "SCRFD 10G selected: expect substantially higher GPU usage and OBS rendering latency than 2.5G");
+	}
+	detector_scrfd_model = packaged_scrfd_2_5g;
+	if (scrfd_model_variant == scrfd_model_10g)
+		detector_scrfd_model = packaged_scrfd_10g;
+	else if (scrfd_model_variant == scrfd_model_custom)
+		detector_scrfd_model = legacy_scrfd_model;
 	yunet_score_threshold = std::clamp((float)obs_data_get_double(settings, "yunet_score_threshold"), 0.01f, 0.99f);
 	yunet_nms_threshold = std::clamp((float)obs_data_get_double(settings, "yunet_nms_threshold"), 0.01f, 0.99f);
 	yunet_max_input_size = std::clamp((int)obs_data_get_int(settings, "yunet_max_input_size"), 160, 1280);
@@ -592,6 +616,20 @@ static bool tracking_th_en_modified(obs_properties_t *props, obs_property_t *, o
 	return true;
 }
 
+#ifdef HAVE_SCRFD
+static bool scrfd_model_variant_modified(obs_properties_t *props, obs_property_t *, obs_data_t *settings)
+{
+	int variant = (int)obs_data_get_int(settings, "scrfd_model_variant");
+	obs_property_t *warning = obs_properties_get(props, "scrfd_10g_warning");
+	obs_property_t *custom_model = obs_properties_get(props, "detector_scrfd_model");
+	if (warning)
+		obs_property_set_visible(warning, variant == (int)face_tracker_manager::scrfd_model_10g);
+	if (custom_model)
+		obs_property_set_visible(custom_model, variant == (int)face_tracker_manager::scrfd_model_custom);
+	return true;
+}
+#endif
+
 void face_tracker_manager::get_properties(obs_properties_t *pp)
 {
 	obs_property_t *p;
@@ -612,34 +650,56 @@ void face_tracker_manager::get_properties(obs_properties_t *pp)
 
 		p = obs_properties_add_list(group, "detector_gpu_device", obs_module_text("GPU.Device"),
 					    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-		auto gpu_devices = face_detector_dlib_cnn::get_gpu_device_names();
+		std::vector<std::pair<int, std::string>> gpu_devices;
+		auto dlib_gpu_devices = face_detector_dlib_cnn::get_gpu_device_names();
+		for (size_t i = 0; i < dlib_gpu_devices.size(); i++)
+			gpu_devices.emplace_back((int)i, std::move(dlib_gpu_devices[i]));
+#if defined(HAVE_SCRFD) && defined(HAVE_ONNXRUNTIME_CUDA)
+		if (gpu_devices.empty())
+			gpu_devices = face_detector_scrfd::get_cuda_devices();
+#endif
 		if (gpu_devices.empty()) {
-#ifdef HAVE_ONNXRUNTIME_CUDA
-			obs_property_list_add_int(p, obs_module_text("GPU.Default"), 0);
-#else
 			obs_property_list_add_int(p, obs_module_text("GPU.Unavailable"), -1);
 			obs_property_set_enabled(p, false);
-#endif
 		} else {
-			for (size_t i = 0; i < gpu_devices.size(); i++) {
-				std::string label = std::to_string(i) + ": " + gpu_devices[i];
-				obs_property_list_add_int(p, label.c_str(), (long long)i);
+			for (const auto &[ordinal, name] : gpu_devices) {
+				std::string label = std::to_string(ordinal) + ": " + name;
+				obs_property_list_add_int(p, label.c_str(), (long long)ordinal);
 			}
 		}
 
 #ifdef HAVE_SCRFD
+		p = obs_properties_add_list(group, "scrfd_model_variant", obs_module_text("SCRFD.ModelVariant"),
+					    OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+		obs_property_list_add_int(p, obs_module_text("SCRFD.Model2.5G"), (int)scrfd_model_2_5g);
+		obs_property_list_add_int(p, obs_module_text("SCRFD.Model10G"), (int)scrfd_model_10g);
+		obs_property_list_add_int(p, obs_module_text("SCRFD.ModelCustom"), (int)scrfd_model_custom);
+		obs_property_set_long_description(p, obs_module_text("SCRFD.10GWarning"));
+		obs_property_set_modified_callback(p, scrfd_model_variant_modified);
+
+		p = obs_properties_add_text(group, "scrfd_10g_warning", obs_module_text("SCRFD.10GWarning"),
+					    OBS_TEXT_INFO);
+		obs_property_text_set_info_type(p, OBS_TEXT_INFO_WARNING);
+		obs_property_set_visible(p, false);
+
+		p = obs_properties_add_path(group, "detector_scrfd_model", obs_module_text("SCRFD.CustomModel"),
+					    OBS_PATH_FILE,
+					    "ONNX Models (*.onnx);;"
+					    "All Files (*.*)",
+					    (data_path + "/" DIR_SCRFD).c_str());
+		obs_property_set_visible(p, false);
 #ifdef HAVE_ONNXRUNTIME_CUDA
-		obs_properties_add_bool(group, "scrfd_use_cuda", obs_module_text("SCRFD.UseCUDA"));
+		p = obs_properties_add_bool(group, "scrfd_use_cuda", obs_module_text("SCRFD.UseCUDA"));
+		if (gpu_devices.empty()) {
+			obs_property_set_enabled(p, false);
+			obs_property_set_long_description(p, obs_module_text("SCRFD.CUDAUnavailable"));
+		}
 #endif
 		obs_properties_add_float_slider(group, "scrfd_score_threshold", obs_module_text("SCRFD.ScoreThreshold"),
 						0.01, 0.99, 0.01);
 		obs_properties_add_float_slider(group, "scrfd_nms_threshold", obs_module_text("SCRFD.NmsThreshold"),
 						0.01, 0.99, 0.01);
 		obs_properties_add_int(group, "scrfd_input_size", obs_module_text("SCRFD.InputSize"), 160, 1280, 32);
-		obs_properties_add_path(group, "detector_scrfd_model", obs_module_text("SCRFD.Model"), OBS_PATH_FILE,
-					"ONNX Models (*.onnx);;"
-					"All Files (*.*)",
-					(data_path + "/" DIR_SCRFD).c_str());
 #endif
 #ifdef HAVE_YUNET
 		obs_properties_add_float_slider(group, "yunet_score_threshold", obs_module_text("YuNet.ScoreThreshold"),
@@ -749,20 +809,30 @@ void face_tracker_manager::get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "detector_interval_lost_ms", 250);
 	obs_data_set_default_int(settings, "tracker_interval_ms", 50);
 	obs_data_set_default_int(settings, "target_stick_ms", 1500);
+	bool cuda_available = false;
+#if defined(HAVE_SCRFD) && defined(HAVE_ONNXRUNTIME_CUDA)
+	auto cuda_devices = face_detector_scrfd::get_cuda_devices();
+	cuda_available = !cuda_devices.empty();
+	obs_data_set_default_int(settings, "detector_gpu_device", cuda_available ? cuda_devices.front().first : 0);
+#else
 	obs_data_set_default_int(settings, "detector_gpu_device", 0);
+#endif
 	obs_data_set_default_double(settings, "yunet_score_threshold", 0.6);
 	obs_data_set_default_double(settings, "yunet_nms_threshold", 0.3);
 	obs_data_set_default_int(settings, "yunet_max_input_size", 320);
 	obs_data_set_default_double(settings, "scrfd_score_threshold", 0.5);
 	obs_data_set_default_double(settings, "scrfd_nms_threshold", 0.4);
 	obs_data_set_default_int(settings, "scrfd_input_size", 640);
+	obs_data_set_default_int(settings, "scrfd_model_variant", (int)scrfd_model_2_5g);
 #ifdef HAVE_ONNXRUNTIME_CUDA
-	obs_data_set_default_bool(settings, "scrfd_use_cuda", true);
+	obs_data_set_default_bool(settings, "scrfd_use_cuda", cuda_available);
 #else
 	obs_data_set_default_bool(settings, "scrfd_use_cuda", false);
 #endif
 #ifdef HAVE_YUNET
-	obs_data_set_default_int(settings, "detector_engine", (int)engine_yunet);
+	obs_data_set_default_int(settings, "detector_engine", cuda_available ? (int)engine_scrfd : (int)engine_yunet);
+#elif defined(HAVE_SCRFD)
+	obs_data_set_default_int(settings, "detector_engine", (int)engine_scrfd);
 #endif
 
 	if (char *f = obs_module_file(DIR_DLIB_HOG "/frontal_face_detector.dat")) {
@@ -790,10 +860,17 @@ void face_tracker_manager::get_defaults(obs_data_t *settings)
 
 #ifdef HAVE_SCRFD
 	if (char *f = obs_module_file(DIR_SCRFD "/scrfd_2.5g_bnkps.onnx")) {
+		obs_data_set_default_string(settings, "detector_scrfd_2_5g_model", f);
 		obs_data_set_default_string(settings, "detector_scrfd_model", f);
 		bfree(f);
 	} else {
 		blog(LOG_WARNING, "scrfd_2.5g_bnkps.onnx is not found; select an SCRFD ONNX model in properties.");
+	}
+	if (char *f = obs_module_file(DIR_SCRFD "/scrfd_10g_bnkps.onnx")) {
+		obs_data_set_default_string(settings, "detector_scrfd_10g_model", f);
+		bfree(f);
+	} else {
+		blog(LOG_WARNING, "scrfd_10g_bnkps.onnx is not found; the SCRFD 10G preset is unavailable.");
 	}
 #endif
 

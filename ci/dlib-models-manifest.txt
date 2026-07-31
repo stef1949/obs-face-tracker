@@ -14,8 +14,13 @@ be467b1a76f482693de3b0f6a1ff91d092319be71523d4d4b0628f6a53fcb87a  dlib_cnn_model
 c4b1e9804792707d3a405c2c16a80a20269e6675021f64a41d30fffafbc41888  dlib_face_landmark_model/shape_predictor_5_face_landmarks.dat
 ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0  yunet_model/face_detection_yunet_2026may.onnx
 
-# Optional InsightFace model; non-commercial research terms apply.
+# Optional InsightFace models; non-commercial research terms apply.
 bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce  scrfd_model/scrfd_2.5g_bnkps.onnx
+5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  scrfd_model/scrfd_10g_bnkps.onnx
+
+SCRFD 10G source: det_10g.onnx from InsightFace v0.7 buffalo_l.zip
+source: https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
+archive SHA-256: 80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f
 
 Optional non-commercial model SHA-256 values:
 
