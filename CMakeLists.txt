@@ -168,7 +168,14 @@ add_library(${CMAKE_PROJECT_NAME} MODULE ${PLUGIN_SOURCES})
 
 if (WITH_DOCK)
 	set(plugin_additional_incs ${plugin_additional_incs} src)
-	set(plugin_additional_libs ${plugin_additional_libs} Qt::Gui Qt::Widgets Qt::GuiPrivate)
+	set(plugin_additional_libs ${plugin_additional_libs} Qt::Gui Qt::Widgets)
+	if(OS_LINUX)
+		if(NOT TARGET Qt::GuiPrivate)
+			message(FATAL_ERROR
+				"The Linux dock requires Qt Gui private development headers")
+		endif()
+		list(APPEND plugin_additional_libs Qt::GuiPrivate)
+	endif()
 endif()
 
 include_directories(

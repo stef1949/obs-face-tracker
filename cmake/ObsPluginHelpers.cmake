@@ -45,10 +45,6 @@ macro(find_qt)
 	set(multiValueArgs COMPONENTS COMPONENTS_WIN COMPONENTS_MAC COMPONENTS_LINUX)
 	cmake_parse_arguments(FIND_QT "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-	if(FIND_QT_VERSION VERSION_GREATER_EQUAL 6 AND "Gui" IN_LIST FIND_QT_COMPONENTS)
-		list(APPEND FIND_QT_COMPONENTS "GuiPrivate")
-	endif()
-
 	if(OS_WINDOWS)
 		find_package(
 			Qt${FIND_QT_VERSION}
@@ -64,6 +60,33 @@ macro(find_qt)
 			Qt${FIND_QT_VERSION}
 			COMPONENTS ${FIND_QT_COMPONENTS} ${FIND_QT_COMPONENTS_LINUX}
 			REQUIRED)
+	endif()
+
+	# Some Linux distributions expose GuiPrivate through the public Gui package,
+	# while others install a standalone Qt<major>GuiPrivate package config. Do
+	# not request GuiPrivate as a Qt component: that makes Qt_FOUND false on
+	# Debian/Ubuntu and older Fedora releases even when the private headers are
+	# installed.
+	if(OS_LINUX AND "Gui" IN_LIST FIND_QT_COMPONENTS)
+		set(_QT_GUI_PRIVATE_TARGET "Qt${FIND_QT_VERSION}::GuiPrivate")
+		if(FIND_QT_VERSION VERSION_GREATER_EQUAL 6 AND NOT TARGET ${_QT_GUI_PRIVATE_TARGET})
+			find_package(Qt${FIND_QT_VERSION}GuiPrivate CONFIG QUIET)
+		endif()
+
+		if(NOT TARGET ${_QT_GUI_PRIVATE_TARGET})
+			set(_QT_GUI_PRIVATE_INCLUDES_VAR
+				"Qt${FIND_QT_VERSION}Gui_PRIVATE_INCLUDE_DIRS")
+			if(DEFINED ${_QT_GUI_PRIVATE_INCLUDES_VAR}
+					AND NOT "${${_QT_GUI_PRIVATE_INCLUDES_VAR}}" STREQUAL "")
+				add_library(${_QT_GUI_PRIVATE_TARGET} INTERFACE IMPORTED)
+				set_target_properties(
+					${_QT_GUI_PRIVATE_TARGET} PROPERTIES
+					INTERFACE_INCLUDE_DIRECTORIES "${${_QT_GUI_PRIVATE_INCLUDES_VAR}}"
+					INTERFACE_LINK_LIBRARIES "Qt${FIND_QT_VERSION}::Gui")
+			endif()
+		endif()
+
+		list(APPEND FIND_QT_COMPONENTS "GuiPrivate")
 	endif()
 
 	foreach(_COMPONENT IN LISTS FIND_QT_COMPONENTS FIND_QT_COMPONENTS_WIN

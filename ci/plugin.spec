@@ -19,7 +19,7 @@ BuildRequires: libjxl-devel
 %package data
 Summary: Model file for %{name}
 BuildArch: noarch
-License: CC0-1.0
+License: CC0-1.0 AND MIT
 
 %package data-nonfree
 Summary: Non-free model file for %{name}
@@ -64,7 +64,9 @@ mkdir -p %{buildroot}/%{_datadir}/licenses/%{name}-data-nonfree/
 cp LICENSE %{buildroot}/%{_datadir}/licenses/%{name}/
 mv %{buildroot}/%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/LICENSE-dlib %{buildroot}/%{_datadir}/licenses/%{name}/
 mv %{buildroot}/%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/LICENSE-dlib-models %{buildroot}/%{_datadir}/licenses/%{name}-data/
+mv %{buildroot}/%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/LICENSE-yunet %{buildroot}/%{_datadir}/licenses/%{name}-data/
 mv %{buildroot}/%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/LICENSE-shape_predictor_68_face_landmarks %{buildroot}/%{_datadir}/licenses/%{name}-data-nonfree/
+mv %{buildroot}/%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/LICENSE-scrfd-model %{buildroot}/%{_datadir}/licenses/%{name}-data-nonfree/
 
 %files
 %{_libdir}/obs-plugins/@PLUGIN_NAME@.so
@@ -75,9 +77,12 @@ mv %{buildroot}/%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/LICENSE-shape_predicto
 %{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/dlib_cnn_model
 %{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/dlib_face_landmark_model/shape_predictor_5_face_landmarks.dat
 %{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/dlib_hog_model
+%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/yunet_model
+%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/MODEL-MANIFEST.txt
 %{_datadir}/licenses/%{name}-data/*
 
 %files data-nonfree
 %{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/dlib_face_landmark_model/shape_predictor_68_face_landmarks.dat
 %{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/dlib_face_landmark_model/shape_predictor_68_face_landmarks_GTX.dat
+%{_datadir}/obs/obs-plugins/@PLUGIN_NAME@/scrfd_model
 %{_datadir}/licenses/%{name}-data-nonfree/*
