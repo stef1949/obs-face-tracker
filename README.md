@@ -61,6 +61,13 @@ for the current limitations of the PTZ control feature.
 > prebuilt build has not been published yet. GitHub's automatic **Source code**
 > ZIP and the `Windows-Symbols.zip` file are not installable plugin packages.
 
+The standard Windows installer and package ZIP include ONNX Runtime, YuNet,
+SCRFD-2.5G, and their model files. No separate detector download is required.
+YuNet is the default for new Face Tracker sources; SCRFD can be selected under
+**Detector and model**. The packaged SCRFD model is subject to InsightFace's
+non-commercial research terms; review `LICENSE-scrfd-model` in the installed
+plugin data directory before use.
+
 ### Windows installer (recommended)
 
 1. Close OBS Studio.
@@ -167,6 +174,15 @@ make
 
 For Windows, see `.github/workflows/main.yml`.
 
+### Publishing a release
+
+1. Update the project version and changelog, then commit the release.
+2. Create a version tag on that commit and push it to GitHub.
+3. The **Plugin Build** workflow builds and tests every OBS/platform package.
+4. After all build jobs pass, the workflow creates or updates the matching
+   GitHub Release and uploads the installers, package archives, symbols, and
+   `SHA256SUMS.txt`.
+
 ### Optional CUDA acceleration
 
 The dlib CNN detector can run on NVIDIA GPUs when the plugin is built with
@@ -179,11 +195,13 @@ correlation tracker remain CPU-based.
 
 ### YuNet ONNX detector
 
-YuNet is available as an optional lightweight CPU detector through ONNX
-Runtime. On Windows, download the pinned runtime SDK and configure the plugin:
+YuNet is a lightweight CPU detector through ONNX Runtime. It is prepackaged in
+standard Windows releases. For a source build, download the pinned runtime SDK
+and configure the plugin:
 
 ```powershell
-$ort = & .\ci\windows\download-onnxruntime.ps1
+$ort = (& powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\ci\windows\download-onnxruntime.ps1 | Select-Object -Last 1).Trim()
 cmake -S . -B build -DENABLE_YUNET=ON -DONNXRUNTIME_ROOT="$ort"
 ```
 
@@ -193,14 +211,17 @@ uses one ONNX Runtime inference thread and is the default detector for newly
 created sources in YuNet-enabled builds. Existing sources retain their selected
 detector.
 
-### SCRFD ONNX detector with CUDA
+### SCRFD ONNX detector
 
-SCRFD-2.5G is available as a higher-accuracy ONNX detector. On Windows with an
-NVIDIA GPU, use the pinned ONNX Runtime CUDA 12 package and enable both ONNX
-detectors:
+SCRFD-2.5G is a higher-accuracy ONNX detector and is prepackaged with the CPU
+provider in standard Windows releases. For an optional CUDA-enabled source
+build on Windows with an NVIDIA GPU, use the pinned ONNX Runtime CUDA 12
+package and enable both ONNX detectors:
 
 ```powershell
-$ort = & .\ci\windows\download-onnxruntime.ps1 -GpuCuda12
+$ort = (& powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\ci\windows\download-onnxruntime.ps1 -GpuCuda12 |
+  Select-Object -Last 1).Trim()
 cmake -S . -B build `
   -DENABLE_YUNET=ON `
   -DENABLE_SCRFD=ON `
@@ -208,16 +229,15 @@ cmake -S . -B build `
   -DONNXRUNTIME_ROOT="$ort"
 ```
 
-The OBS build uses the CUDA 12 ONNX Runtime package so it shares the CUDA major
-version used by OBS's NVIDIA Video Effects module. It requires CUDA 12 runtime
-libraries and cuDNN 9. The downloader also supports `-GpuCuda13` for hosts that
-do not load CUDA 12 GPU modules. SCRFD prefers
-the selected CUDA device and automatically falls back to its single-threaded
-CPU provider if CUDA cannot initialise. Keep `ENABLE_CUDA=OFF` unless the
-legacy dlib CNN detector also needs CUDA; this avoids loading two independent
-cuDNN clients into OBS. `SCRFD input size` controls the square input for
-dynamic-shape models. Fixed-shape models override it; the local SCRFD-2.5G
-model documented below uses 640x640.
+The CUDA 12 configuration shares the CUDA major version used by OBS's NVIDIA
+Video Effects module. It requires CUDA 12 runtime libraries and cuDNN 9. The
+downloader also supports `-GpuCuda13` for hosts that do not load CUDA 12 GPU
+modules. SCRFD prefers the selected CUDA device and automatically falls back to
+its single-threaded CPU provider if CUDA cannot initialise. Keep
+`ENABLE_CUDA=OFF` unless the legacy dlib CNN detector also needs CUDA; this
+avoids loading two independent cuDNN clients into OBS. `SCRFD input size`
+controls the square input for dynamic-shape models. Fixed-shape models override
+it; the included SCRFD-2.5G model uses 640x640.
 
 For a self-contained Windows package, set `CUDNN_RUNTIME_DIR` to the cuDNN
 `bin` directory and set `CUDA_RUNTIME_DIRS` to a semicolon-separated list of
@@ -226,13 +246,14 @@ preloads cuDNN's split runtime libraries from its own binary directory before
 creating the CUDA session, which is required when OBS loads a plugin outside
 the process search path.
 
-Place a compatible `scrfd_2.5g_bnkps.onnx` file in `data/scrfd_model`. The
-expected local development model has SHA-256
+The repository and standard Windows packages include
+`data/scrfd_model/scrfd_2.5g_bnkps.onnx` with SHA-256
 `bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce`.
 InsightFace limits its pretrained models to non-commercial research use, so the
-standard model updater does not download SCRFD automatically. Review
-`data/LICENSE-scrfd-model` and the current upstream terms before use or
-redistribution.
+standard model updater does not download or replace SCRFD automatically.
+Review `data/LICENSE-scrfd-model` and the current upstream terms before use or
+redistribution. A compatible alternative model can be selected in the Face
+Tracker properties.
 
 ## Preparing model data
 

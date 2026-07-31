@@ -213,6 +213,14 @@ from 1 November 2025, after the upstream 0.9.1 release.
 - Added optional Authenticode signing for the Windows plugin DLL and installer
   through CI secrets.
 - Added SHA-256 output for Windows archives and installers.
+- Standard Windows CI packages now compile YuNet and SCRFD, bundle the pinned
+  CPU ONNX Runtime and both model files, and verify the complete detector
+  runtime before packaging.
+- Tagged builds now create or update a GitHub Release, upload every platform
+  package and installer, and attach a consolidated `SHA256SUMS.txt`.
+- YuNet remains the default for new sources when both ONNX detectors are
+  packaged; SCRFD remains available as a selectable CPU detector, while its
+  CUDA control is exposed only in CUDA-enabled builds.
 
 ### Tests and continuous integration
 
@@ -247,4 +255,3 @@ from 1 November 2025, after the upstream 0.9.1 release.
 - Installed the CUDA build into OBS Studio 32.1.0 and verified live face
   tracking, settings layout, cuDNN runtime preload, SCRFD model loading, and the
   ONNX Runtime 1.26 CUDA provider on GPU 0.
- 

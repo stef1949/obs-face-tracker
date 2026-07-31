@@ -86,7 +86,7 @@ struct face_detector_scrfd::private_s
 	int crop_b = 0;
 	int gpu_device = 0;
 	int loaded_gpu_device = -1;
-	bool use_cuda = true;
+	bool use_cuda = false;
 	bool loaded_use_cuda = false;
 	bool active_cuda = false;
 	uint64_t retry_after_ns = 0;
@@ -130,7 +130,12 @@ void face_detector_scrfd::set_config(float score_threshold, float nms_threshold,
 	p->score_threshold = std::clamp(score_threshold, 0.01f, 0.99f);
 	p->nms_threshold = std::clamp(nms_threshold, 0.01f, 0.99f);
 	p->requested_input_size = std::clamp((input_size / 32) * 32, 160, 1280);
+#ifdef HAVE_ONNXRUNTIME_CUDA
 	p->use_cuda = use_cuda;
+#else
+	(void)use_cuda;
+	p->use_cuda = false;
+#endif
 	p->gpu_device = std::max(gpu_device, 0);
 }
 
@@ -155,6 +160,7 @@ void face_detector_scrfd::detect_main()
 			p->session.reset();
 			p->active_cuda = false;
 			if (p->use_cuda) {
+#ifdef HAVE_ONNXRUNTIME_CUDA
 				try {
 #ifdef _WIN32
 					if (!preload_cudnn_runtime_libraries())
@@ -176,6 +182,7 @@ void face_detector_scrfd::detect_main()
 					blog(LOG_WARNING, "SCRFD CUDA provider unavailable on GPU %d; using CPU: %s",
 					     p->gpu_device, e.what());
 				}
+#endif
 			}
 			if (!p->session) {
 				auto options = make_session_options();

@@ -4,6 +4,7 @@
 /build32/
 /build64/
 /release/
+/.deps/
 /installer/Output/
 
 .vscode

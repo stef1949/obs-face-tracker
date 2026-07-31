@@ -1,11 +1,13 @@
 name: Plugin Build on Docker
 
 on:
+  workflow_dispatch:
   push:
     paths-ignore:
       - '**.md'
     branches:
       - main
+      - obs-face-tracker
     tags:
       - '*'
   pull_request:
@@ -13,6 +15,7 @@ on:
       - '**.md'
     branches:
       - main
+      - obs-face-tracker
 
 env:
   artifactName: ${{ contains(github.ref_name, '/') && 'docker-artifact' || github.ref_name }}-rpm

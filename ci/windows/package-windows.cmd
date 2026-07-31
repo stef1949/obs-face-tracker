@@ -10,6 +10,21 @@ if not exist "release\data\obs-plugins\%PluginName%\locale\en-US.ini" (
 	exit /b 1
 )
 
+if not exist "release\obs-plugins\64bit\onnxruntime.dll" (
+	echo ERROR: ONNX Runtime is not in release\obs-plugins\64bit. 1>&2
+	exit /b 1
+)
+
+if not exist "release\data\obs-plugins\%PluginName%\yunet_model\face_detection_yunet_2026may.onnx" (
+	echo ERROR: The YuNet model is missing from the release package. 1>&2
+	exit /b 1
+)
+
+if not exist "release\data\obs-plugins\%PluginName%\scrfd_model\scrfd_2.5g_bnkps.onnx" (
+	echo ERROR: The SCRFD model is missing from the release package. 1>&2
+	exit /b 1
+)
+
 mkdir package
 cd package
 
