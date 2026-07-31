@@ -10,19 +10,46 @@ if not exist "release\data\obs-plugins\%PluginName%\locale\en-US.ini" (
 	exit /b 1
 )
 
-if not exist "release\obs-plugins\64bit\onnxruntime.dll" (
-	echo ERROR: ONNX Runtime is not in release\obs-plugins\64bit. 1>&2
-	exit /b 1
-)
-
-if not exist "release\data\obs-plugins\%PluginName%\yunet_model\face_detection_yunet_2026may.onnx" (
-	echo ERROR: The YuNet model is missing from the release package. 1>&2
-	exit /b 1
-)
-
-if not exist "release\data\obs-plugins\%PluginName%\scrfd_model\scrfd_2.5g_bnkps.onnx" (
-	echo ERROR: The SCRFD model is missing from the release package. 1>&2
-	exit /b 1
+for %%F in (
+	"release\obs-plugins\64bit\onnxruntime.dll"
+	"release\obs-plugins\64bit\onnxruntime_providers_shared.dll"
+	"release\obs-plugins\64bit\onnxruntime_providers_cuda.dll"
+	"release\obs-plugins\64bit\cudart64_12.dll"
+	"release\obs-plugins\64bit\cublas64_12.dll"
+	"release\obs-plugins\64bit\cublasLt64_12.dll"
+	"release\obs-plugins\64bit\nvblas64_12.dll"
+	"release\obs-plugins\64bit\cufft64_11.dll"
+	"release\obs-plugins\64bit\cufftw64_11.dll"
+	"release\obs-plugins\64bit\curand64_10.dll"
+	"release\obs-plugins\64bit\cudnn64_9.dll"
+	"release\obs-plugins\64bit\cudnn_adv64_9.dll"
+	"release\obs-plugins\64bit\cudnn_cnn64_9.dll"
+	"release\obs-plugins\64bit\cudnn_engines_precompiled64_9.dll"
+	"release\obs-plugins\64bit\cudnn_engines_runtime_compiled64_9.dll"
+	"release\obs-plugins\64bit\cudnn_engines_tensor_ir64_9.dll"
+	"release\obs-plugins\64bit\cudnn_ext64_9.dll"
+	"release\obs-plugins\64bit\cudnn_graph64_9.dll"
+	"release\obs-plugins\64bit\cudnn_heuristic64_9.dll"
+	"release\obs-plugins\64bit\cudnn_ops64_9.dll"
+	"release\obs-plugins\64bit\nvJitLink_120_0.dll"
+	"release\obs-plugins\64bit\nvrtc64_120_0.dll"
+	"release\obs-plugins\64bit\nvrtc64_120_0.alt.dll"
+	"release\obs-plugins\64bit\nvrtc-builtins64_129.dll"
+	"release\data\obs-plugins\%PluginName%\yunet_model\face_detection_yunet_2026may.onnx"
+	"release\data\obs-plugins\%PluginName%\scrfd_model\scrfd_2.5g_bnkps.onnx"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\CUDA-RUNTIME-MANIFEST.txt"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-cublas-cu12.txt"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-cuda-nvrtc-cu12.txt"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-cuda-runtime-cu12.txt"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-cudnn-cu12.txt"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-cufft-cu12.txt"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-curand-cu12.txt"
+	"release\data\obs-plugins\%PluginName%\cuda-runtime-licenses\LICENSE-nvidia-nvjitlink-cu12.txt"
+) do (
+	if not exist "%%~F" (
+		echo ERROR: Required CUDA package file is missing: %%~F 1>&2
+		exit /b 1
+	)
 )
 
 mkdir package

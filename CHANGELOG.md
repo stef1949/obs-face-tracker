@@ -191,10 +191,14 @@ from 1 November 2025, after the upstream 0.9.1 release.
   UndefinedBehavior sanitizers, and ThreadSanitizer.
 - Added ONNX Runtime SDK discovery, compile definitions, linking, runtime DLL
   installation, and third-party notice installation.
-- Added Windows packaging for ONNX Runtime, CUDA runtime, cuBLAS, cuFFT, and
-  cuDNN DLLs, including validation that required runtime files exist.
+- Added Windows packaging for ONNX Runtime, CUDA runtime, cuBLAS, cuFFT,
+  cuRAND, NVRTC, nvJitLink, and cuDNN DLLs, including validation that required
+  runtime files exist.
 - Added a checksum-pinned PowerShell downloader for ONNX Runtime 1.26.0 CPU,
   CUDA 12, and CUDA 13 packages.
+- Added a checksum-pinned, resumable NVIDIA CUDA 12 and cuDNN 9 runtime
+  downloader that collects the Windows DLLs and their license notices for
+  self-contained release packages.
 - Added CUDA 13 handling for dlib's obsolete `sm_50` configuration probe while
   retaining the actual target-architecture build as the compatibility check.
 - Updated model preparation to use pinned revisions and SHA-256 validation for
@@ -213,14 +217,14 @@ from 1 November 2025, after the upstream 0.9.1 release.
 - Added optional Authenticode signing for the Windows plugin DLL and installer
   through CI secrets.
 - Added SHA-256 output for Windows archives and installers.
-- Standard Windows CI packages now compile YuNet and SCRFD, bundle the pinned
-  CPU ONNX Runtime and both model files, and verify the complete detector
-  runtime before packaging.
+- Standard Windows CI packages now compile YuNet and SCRFD, bundle pinned ONNX
+  Runtime CUDA 12, CUDA 12, cuDNN 9, both model files, and NVIDIA license
+  notices, and verify the complete GPU detector runtime before packaging.
 - Tagged builds now create or update a GitHub Release, upload every platform
   package and installer, and attach a consolidated `SHA256SUMS.txt`.
 - YuNet remains the default for new sources when both ONNX detectors are
-  packaged; SCRFD remains available as a selectable CPU detector, while its
-  CUDA control is exposed only in CUDA-enabled builds.
+  packaged; SCRFD is selectable with CUDA enabled by default and automatically
+  falls back to its single-threaded CPU provider if GPU initialization fails.
 
 ### Tests and continuous integration
 

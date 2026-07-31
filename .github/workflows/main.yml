@@ -328,7 +328,36 @@ jobs:
           name: ${{ env.artifactName }}-macos-obs${{ matrix.obs }}-${{ matrix.arch }}
           path: package/*
 
+  windows_cuda_dependencies:
+    name: Prepare Windows CUDA dependencies
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore CUDA runtime cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .deps/onnxruntime-gpu-cuda12
+            .deps/cuda12-runtime
+          key: windows-cuda12-ort-1.26.0-runtime-20260731-v1
+
+      - name: Materialize CUDA dependencies
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\ci\windows\download-onnxruntime.ps1 -GpuCuda12
+          if ($LASTEXITCODE -ne 0) {
+            throw "ONNX Runtime downloader failed with exit code $LASTEXITCODE"
+          }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\ci\windows\download-cuda12-runtime.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw "CUDA runtime downloader failed with exit code $LASTEXITCODE"
+          }
+
   windows_build:
+    needs: windows_cuda_dependencies
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -360,17 +389,37 @@ jobs:
           set -ex
           DESTDIR='./' ci/download-dlib-models.sh
 
-      - name: Download ONNX Runtime
+      - name: Restore CUDA runtime cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .deps/onnxruntime-gpu-cuda12
+            .deps/cuda12-runtime
+          key: windows-cuda12-ort-1.26.0-runtime-20260731-v1
+
+      - name: Download ONNX Runtime CUDA 12
         run: |
           $OnnxRuntimeRoot = (
             & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-              -File .\ci\windows\download-onnxruntime.ps1 |
+              -File .\ci\windows\download-onnxruntime.ps1 -GpuCuda12 |
               Select-Object -Last 1
           ).Trim()
           if ($LASTEXITCODE -ne 0) {
             throw "ONNX Runtime downloader failed with exit code $LASTEXITCODE"
           }
           "ONNXRUNTIME_ROOT=$OnnxRuntimeRoot" >> $env:GITHUB_ENV
+
+      - name: Download CUDA 12 and cuDNN runtime
+        run: |
+          $CudaRuntimeRoot = (
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+              -File .\ci\windows\download-cuda12-runtime.ps1 |
+              Select-Object -Last 1
+          ).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw "CUDA runtime downloader failed with exit code $LASTEXITCODE"
+          }
+          "CUDA_RUNTIME_ROOT=$CudaRuntimeRoot" >> $env:GITHUB_ENV
 
       - name: Build plugin
         run: |
@@ -379,7 +428,11 @@ jobs:
             '-DCMAKE_SYSTEM_VERSION=10.0.18363.657'
             '-DENABLE_YUNET=ON'
             '-DENABLE_SCRFD=ON'
+            '-DENABLE_ONNXRUNTIME_CUDA=ON'
             "-DONNXRUNTIME_ROOT=$env:ONNXRUNTIME_ROOT"
+            "-DCUDNN_RUNTIME_DIR=$env:CUDA_RUNTIME_ROOT\bin"
+            "-DCUDA_RUNTIME_DIRS=$env:CUDA_RUNTIME_ROOT\bin"
+            "-DCUDA_RUNTIME_NOTICE_DIR=$env:CUDA_RUNTIME_ROOT\licenses"
           )
           cmake -S . -B build @CmakeArgs ${{ steps.obsdeps.outputs.PLUGIN_CMAKE_OPTIONS_PS }}
           cmake --build build --config RelWithDebInfo -j 4
@@ -389,12 +442,43 @@ jobs:
         run: |
           $RequiredFiles = @(
             'release\obs-plugins\64bit\onnxruntime.dll'
+            'release\obs-plugins\64bit\onnxruntime_providers_shared.dll'
+            'release\obs-plugins\64bit\onnxruntime_providers_cuda.dll'
+            'release\obs-plugins\64bit\cudart64_12.dll'
+            'release\obs-plugins\64bit\cublas64_12.dll'
+            'release\obs-plugins\64bit\cublasLt64_12.dll'
+            'release\obs-plugins\64bit\nvblas64_12.dll'
+            'release\obs-plugins\64bit\cufft64_11.dll'
+            'release\obs-plugins\64bit\cufftw64_11.dll'
+            'release\obs-plugins\64bit\curand64_10.dll'
+            'release\obs-plugins\64bit\cudnn64_9.dll'
+            'release\obs-plugins\64bit\cudnn_adv64_9.dll'
+            'release\obs-plugins\64bit\cudnn_cnn64_9.dll'
+            'release\obs-plugins\64bit\cudnn_engines_precompiled64_9.dll'
+            'release\obs-plugins\64bit\cudnn_engines_runtime_compiled64_9.dll'
+            'release\obs-plugins\64bit\cudnn_engines_tensor_ir64_9.dll'
+            'release\obs-plugins\64bit\cudnn_ext64_9.dll'
+            'release\obs-plugins\64bit\cudnn_graph64_9.dll'
+            'release\obs-plugins\64bit\cudnn_heuristic64_9.dll'
+            'release\obs-plugins\64bit\cudnn_ops64_9.dll'
+            'release\obs-plugins\64bit\nvJitLink_120_0.dll'
+            'release\obs-plugins\64bit\nvrtc64_120_0.dll'
+            'release\obs-plugins\64bit\nvrtc64_120_0.alt.dll'
+            'release\obs-plugins\64bit\nvrtc-builtins64_129.dll'
             'release\data\obs-plugins\obs-face-tracker\yunet_model\face_detection_yunet_2026may.onnx'
             'release\data\obs-plugins\obs-face-tracker\scrfd_model\scrfd_2.5g_bnkps.onnx'
             'release\data\obs-plugins\obs-face-tracker\LICENSE-yunet'
             'release\data\obs-plugins\obs-face-tracker\LICENSE-scrfd-model'
             'release\data\obs-plugins\obs-face-tracker\LICENSE.onnxruntime'
             'release\data\obs-plugins\obs-face-tracker\ThirdPartyNotices.txt.onnxruntime'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\CUDA-RUNTIME-MANIFEST.txt'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\LICENSE-nvidia-cublas-cu12.txt'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\LICENSE-nvidia-cuda-nvrtc-cu12.txt'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\LICENSE-nvidia-cuda-runtime-cu12.txt'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\LICENSE-nvidia-cudnn-cu12.txt'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\LICENSE-nvidia-cufft-cu12.txt'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\LICENSE-nvidia-curand-cu12.txt'
+            'release\data\obs-plugins\obs-face-tracker\cuda-runtime-licenses\LICENSE-nvidia-nvjitlink-cu12.txt'
           )
           foreach ($Path in $RequiredFiles) {
             if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -460,6 +544,26 @@ jobs:
           pattern: ${{ env.artifactName }}-*
           path: release-assets
           merge-multiple: true
+
+      - name: Verify Windows release installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for obs_major in 30 31 32; do
+            if ! compgen -G "release-assets/*-obs${obs_major}-Windows-Installer.exe" >/dev/null; then
+              echo "The OBS ${obs_major} Windows installer is missing from the release assets." >&2
+              exit 1
+            fi
+          done
+
+          mapfile -t oversized < <(
+            find release-assets -maxdepth 1 -type f -size +2147483647c -print
+          )
+          if (( ${#oversized[@]} != 0 )); then
+            printf 'Release asset exceeds the GitHub 2 GiB per-file limit: %s\n' \
+              "${oversized[@]}" >&2
+            exit 1
+          fi
 
       - name: Generate SHA-256 checksums
         working-directory: release-assets

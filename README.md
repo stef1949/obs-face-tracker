@@ -55,18 +55,27 @@ for the current limitations of the PTZ control feature.
   version. Check it in OBS under **Help > About OBS Studio**.
 - A prebuilt package from this fork's
   [Releases page](https://github.com/stef1949/obs-face-tracker/releases).
+- An NVIDIA driver that supports CUDA 12 if you want SCRFD GPU acceleration.
+  The plugin still starts and SCRFD falls back to CPU if CUDA cannot initialize.
 
 > [!IMPORTANT]
 > If the Releases page has no package for your OBS version, a compatible
 > prebuilt build has not been published yet. GitHub's automatic **Source code**
 > ZIP and the `Windows-Symbols.zip` file are not installable plugin packages.
 
-The standard Windows installer and package ZIP include ONNX Runtime, YuNet,
-SCRFD-2.5G, and their model files. No separate detector download is required.
-YuNet is the default for new Face Tracker sources; SCRFD can be selected under
-**Detector and model**. The packaged SCRFD model is subject to InsightFace's
-non-commercial research terms; review `LICENSE-scrfd-model` in the installed
-plugin data directory before use.
+The standard Windows installer and package ZIP are the CUDA build. They include
+ONNX Runtime CUDA 12, the required CUDA 12 and cuDNN 9 runtime DLLs, YuNet,
+SCRFD-2.5G, and both model files. You do not need to install the CUDA Toolkit,
+cuDNN, ONNX Runtime, or detector models separately. Because those GPU libraries
+are prepackaged, the installer is substantially larger than a CPU-only plugin.
+YuNet remains the default for new Face Tracker sources; select SCRFD under
+**Detector and model** and leave **Use CUDA for SCRFD** enabled for NVIDIA GPU
+acceleration. SCRFD automatically falls back to its CPU provider if CUDA cannot
+initialize.
+
+The packaged SCRFD model is subject to InsightFace's non-commercial research
+terms; review `LICENSE-scrfd-model` in the installed plugin data directory
+before use.
 
 ### Windows installer (recommended)
 
@@ -81,10 +90,16 @@ plugin data directory before use.
    it is `C:\Program Files\obs-studio`. If you use a custom or portable
    installation, select the folder that contains `bin\64bit\obs64.exe`.
    Do not select the `bin` or `bin\64bit` folder itself.
-6. Complete the installer, then start OBS Studio.
-7. Confirm the plugin appears by opening the **Sources** add menu and looking
+6. Complete the installer. This installs the plugin, CUDA runtime libraries,
+   cuDNN, ONNX Runtime, YuNet, SCRFD, and both detector models into the OBS
+   directory; it does not modify a system-wide CUDA installation.
+7. Start OBS Studio.
+8. Confirm the plugin appears by opening the **Sources** add menu and looking
    for **Face Tracker**, or by opening a video source's **Filters** window and
    looking for **Face Tracker** under **Effect Filters**.
+9. Add or open a Face Tracker source/filter. Under **Detector and model**,
+   confirm both **YuNet** and **SCRFD** are available. Select **SCRFD**, enable
+   **Use CUDA for SCRFD**, and choose the desired NVIDIA device.
 
 ### Windows ZIP (manual installation)
 
@@ -100,7 +115,12 @@ plugin data directory before use.
 
    ```text
    obs-plugins\64bit\obs-face-tracker.dll
+   obs-plugins\64bit\onnxruntime_providers_cuda.dll
+   obs-plugins\64bit\cudart64_12.dll
+   obs-plugins\64bit\cudnn64_9.dll
    data\obs-plugins\obs-face-tracker\locale\en-US.ini
+   data\obs-plugins\obs-face-tracker\yunet_model\face_detection_yunet_2026may.onnx
+   data\obs-plugins\obs-face-tracker\scrfd_model\scrfd_2.5g_bnkps.onnx
    ```
 
    For a standard installation, the DLL's full path is
@@ -128,6 +148,9 @@ plugin data directory before use.
    `obs-face-tracker` to find the module-loading error.
 5. If OBS was open during installation, close and reopen it before checking
    the menus again.
+6. If SCRFD reports CPU fallback, update the NVIDIA display driver and inspect
+   the OBS log for `SCRFD` and `CUDA`. A separate CUDA Toolkit installation is
+   not required.
 
 For macOS, see the
 [macOS installation procedure](https://github.com/norihiro/obs-face-tracker/wiki/Install-MacOS).
@@ -213,38 +236,45 @@ detector.
 
 ### SCRFD ONNX detector
 
-SCRFD-2.5G is a higher-accuracy ONNX detector and is prepackaged with the CPU
-provider in standard Windows releases. For an optional CUDA-enabled source
-build on Windows with an NVIDIA GPU, use the pinned ONNX Runtime CUDA 12
-package and enable both ONNX detectors:
+SCRFD-2.5G is a higher-accuracy ONNX detector. Standard Windows releases use
+the CUDA build and include the CUDA 12 provider with automatic CPU fallback.
+For a source build on Windows, download the pinned ONNX Runtime and NVIDIA
+runtime bundles, then enable both ONNX detectors:
 
 ```powershell
 $ort = (& powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\ci\windows\download-onnxruntime.ps1 -GpuCuda12 |
   Select-Object -Last 1).Trim()
+$cuda = (& powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\ci\windows\download-cuda12-runtime.ps1 |
+  Select-Object -Last 1).Trim()
 cmake -S . -B build `
   -DENABLE_YUNET=ON `
   -DENABLE_SCRFD=ON `
   -DENABLE_ONNXRUNTIME_CUDA=ON `
-  -DONNXRUNTIME_ROOT="$ort"
+  -DONNXRUNTIME_ROOT="$ort" `
+  -DCUDNN_RUNTIME_DIR="$cuda\bin" `
+  -DCUDA_RUNTIME_DIRS="$cuda\bin" `
+  -DCUDA_RUNTIME_NOTICE_DIR="$cuda\licenses"
 ```
 
 The CUDA 12 configuration shares the CUDA major version used by OBS's NVIDIA
-Video Effects module. It requires CUDA 12 runtime libraries and cuDNN 9. The
-downloader also supports `-GpuCuda13` for hosts that do not load CUDA 12 GPU
-modules. SCRFD prefers the selected CUDA device and automatically falls back to
-its single-threaded CPU provider if CUDA cannot initialise. Keep
+Video Effects module. The runtime downloader pins and packages CUDA 12 and
+cuDNN 9; end users do not need the CUDA Toolkit. The ONNX Runtime downloader
+also supports `-GpuCuda13` for custom builds on hosts that do not load CUDA 12
+GPU modules, but standard release installers use CUDA 12. SCRFD prefers the
+selected CUDA device and automatically falls back to its single-threaded CPU
+provider if CUDA cannot initialise. Keep
 `ENABLE_CUDA=OFF` unless the legacy dlib CNN detector also needs CUDA; this
 avoids loading two independent cuDNN clients into OBS. `SCRFD input size`
 controls the square input for dynamic-shape models. Fixed-shape models override
 it; the included SCRFD-2.5G model uses 640x640.
 
-For a self-contained Windows package, set `CUDNN_RUNTIME_DIR` to the cuDNN
-`bin` directory and set `CUDA_RUNTIME_DIRS` to a semicolon-separated list of
-the CUDA runtime, cuBLAS, and cuFFT `bin` directories. The plugin explicitly
-preloads cuDNN's split runtime libraries from its own binary directory before
-creating the CUDA session, which is required when OBS loads a plugin outside
-the process search path.
+`CUDNN_RUNTIME_DIR`, `CUDA_RUNTIME_DIRS`, and `CUDA_RUNTIME_NOTICE_DIR` make the
+Windows package self-contained. The plugin explicitly preloads cuDNN's split
+runtime libraries from its own binary directory before creating the CUDA
+session, which is required when OBS loads a plugin outside the process search
+path.
 
 The repository and standard Windows packages include
 `data/scrfd_model/scrfd_2.5g_bnkps.onnx` with SHA-256
