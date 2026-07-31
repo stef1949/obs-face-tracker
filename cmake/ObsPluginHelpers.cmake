@@ -45,6 +45,10 @@ macro(find_qt)
 	set(multiValueArgs COMPONENTS COMPONENTS_WIN COMPONENTS_MAC COMPONENTS_LINUX)
 	cmake_parse_arguments(FIND_QT "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+	if(FIND_QT_VERSION VERSION_GREATER_EQUAL 6 AND "Gui" IN_LIST FIND_QT_COMPONENTS)
+		list(APPEND FIND_QT_COMPONENTS "GuiPrivate")
+	endif()
+
 	if(OS_WINDOWS)
 		find_package(
 			Qt${FIND_QT_VERSION}
@@ -60,10 +64,6 @@ macro(find_qt)
 			Qt${FIND_QT_VERSION}
 			COMPONENTS ${FIND_QT_COMPONENTS} ${FIND_QT_COMPONENTS_LINUX}
 			REQUIRED)
-	endif()
-
-	if("Gui" IN_LIST FIND_QT_COMPONENTS)
-		list(APPEND FIND_QT_COMPONENTS "GuiPrivate")
 	endif()
 
 	foreach(_COMPONENT IN LISTS FIND_QT_COMPONENTS FIND_QT_COMPONENTS_WIN
