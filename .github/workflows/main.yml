@@ -73,9 +73,6 @@ jobs:
           sudo apt install -y \
             libopenblas-dev libopenblas0 \
             || true
-          if [ "${{ matrix.obs }}" -ge 31 ]; then
-            sudo apt install -y qt6-base-private-dev
-          fi
           export OPENBLAS_HOME=/lib/x86_64-linux-gnu/
           cmake -S . -B build \
             -D CMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -121,7 +118,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt install -y libopenblas-dev libopenblas0 qt6-base-private-dev
+          sudo apt install -y libopenblas-dev libopenblas0
           export OPENBLAS_HOME=/lib/x86_64-linux-gnu/
           cmake -S . -B build-sanitized \
             -D CMAKE_BUILD_TYPE=RelWithDebInfo \
