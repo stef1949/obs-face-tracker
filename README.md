@@ -2,21 +2,23 @@
 
 ## Introduction
 
-This plugin provide a feature to track face of a person by detecting and tracking a face.
+This plugin detects and tracks a person's face, then crops the selected source
+to follow them.
 
-This plugin employs [dlib](http://dlib.net/) on face detection and object tracking.
-The frame of the source is periodically taken to face detection algorithm.
-Once a face is found, the face is tracked.
-Based on the location and the size of the face under tracking, the frame will be cropped.
+This plugin employs [dlib](http://dlib.net/) for face detection and object tracking.
+Frames from the selected source are periodically passed to the detector. Once
+a face is found, the tracker follows it and crops the frame based on the face's
+position and size.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete set of changes in this fork.
 
 ## Usage
 
-For several use cases, total 3 methods are provided.
+The plugin provides three ways to use face tracking.
 
 ### Face Tracker Source
-The face tracker is implemented as a source. You can easily have another source that tracks and zooms into a face.
+Create a dedicated source that tracks a face in another source and zooms in.
+
 1. Click the add button on the source list.
 2. Add `Face Tracker`.
 3. Set the `Source` property in the `Input` section at the top.
@@ -24,7 +26,8 @@ The face tracker is implemented as a source. You can easily have another source 
 See [Properties](doc/properties.md) for the description of each property.
 
 ### Face Tracker Filter
-The face tracker is implemented as an effect filter so that any video source can have the face tracker.
+Add face tracking directly to an existing video source.
+
 1. Open filters for a source on OBS Studio.
 2. Click the add button on `Effect Filters`.
 3. Add `Face Tracker`.
@@ -32,27 +35,98 @@ The face tracker is implemented as an effect filter so that any video source can
 See [Properties](doc/properties.md) for the description of each property.
 
 ### Face Tracker PTZ
-Experimental version of PTZ control is provided as an video filter.
-1. Open filters for a source on OBS Studio,
+An experimental version of PTZ control is provided as a video filter.
+
+1. Open filters for a source in OBS Studio.
 2. Click the add button on `Audio/Video Filters`.
 3. Add `Face Tracker PTZ`.
 
 See [Properties](doc/properties-ptz.md) for the description of each property.
 
 See [Limitations](https://github.com/norihiro/obs-face-tracker/wiki/PTZ-Limitation)
-for current limitations of PTZ control feature.
+for the current limitations of the PTZ control feature.
 
-## Installing on Windows
+## Installation
 
-Use the Windows installer when possible. If you install a ZIP manually, extract
-it into the OBS Studio application directory, normally
-`C:\Program Files\obs-studio`. The resulting plugin DLL must be at
-`C:\Program Files\obs-studio\obs-plugins\64bit\obs-face-tracker.dll` (or the
-equivalent path for your OBS installation), not beside `obs64.exe`.
+### Windows requirements
 
-Current release builds are tested against OBS Studio 30, 31, and 32.
+- 64-bit OBS Studio 30, 31, or 32.
+- A package whose `obs<major-version>` label matches your installed OBS major
+  version. Check it in OBS under **Help > About OBS Studio**.
+- A prebuilt package from this fork's
+  [Releases page](https://github.com/stef1949/obs-face-tracker/releases).
+
+> [!IMPORTANT]
+> If the Releases page has no package for your OBS version, a compatible
+> prebuilt build has not been published yet. GitHub's automatic **Source code**
+> ZIP and the `Windows-Symbols.zip` file are not installable plugin packages.
+
+### Windows installer (recommended)
+
+1. Close OBS Studio.
+2. Open the [Releases page](https://github.com/stef1949/obs-face-tracker/releases)
+   and expand **Assets** for the release you want.
+3. Download
+   `obs-face-tracker-<version>-obs<major-version>-Windows-Installer.exe`.
+   For example, use the `obs32` installer with OBS Studio 32.
+4. Run the downloaded installer.
+5. Confirm the OBS Studio application directory. For a standard installation,
+   it is `C:\Program Files\obs-studio`. If you use a custom or portable
+   installation, select the folder that contains `bin\64bit\obs64.exe`.
+   Do not select the `bin` or `bin\64bit` folder itself.
+6. Complete the installer, then start OBS Studio.
+7. Confirm the plugin appears by opening the **Sources** add menu and looking
+   for **Face Tracker**, or by opening a video source's **Filters** window and
+   looking for **Face Tracker** under **Effect Filters**.
+
+### Windows ZIP (manual installation)
+
+1. Close OBS Studio.
+2. From the release's **Assets**, download
+   `obs-face-tracker-<version>-obs<major-version>-Windows.zip`. Do not download
+   `Windows-Symbols.zip`.
+3. Open the ZIP. It contains `obs-plugins` and `data` folders.
+4. Copy both folders into the OBS Studio application directory, normally
+   `C:\Program Files\obs-studio`. Approve the folder merge and administrator
+   prompt if Windows asks.
+5. Verify these files exist under the same OBS Studio directory:
+
+   ```text
+   obs-plugins\64bit\obs-face-tracker.dll
+   data\obs-plugins\obs-face-tracker\locale\en-US.ini
+   ```
+
+   For a standard installation, the DLL's full path is
+   `C:\Program Files\obs-studio\obs-plugins\64bit\obs-face-tracker.dll`. It
+   must not be placed beside `obs64.exe`.
+6. Start OBS Studio and confirm **Face Tracker** appears in the Sources or
+   Effect Filters add menu.
+
+### Upgrading on Windows
+
+1. Close OBS Studio.
+2. Download the package for the new version and your OBS major version.
+3. Run the new installer, or copy both folders from the new ZIP over the
+   existing installation.
+4. Start OBS Studio. Existing scenes and Face Tracker settings are retained.
+
+### If Face Tracker does not appear
+
+1. Confirm OBS is 64-bit and the package's `obs<major-version>` label matches
+   **Help > About OBS Studio**.
+2. Confirm you installed the package ZIP, not a source-code or symbols ZIP.
+3. For a manual install, check both file paths shown above. The DLL without its
+   `data` folder is not a complete installation.
+4. In OBS, select **Help > Log Files > View Current Log** and search for
+   `obs-face-tracker` to find the module-loading error.
+5. If OBS was open during installation, close and reopen it before checking
+   the menus again.
+
+For macOS, see the
+[macOS installation procedure](https://github.com/norihiro/obs-face-tracker/wiki/Install-MacOS).
 
 ## Wiki
+
 - [Install procedure for macOS](https://github.com/norihiro/obs-face-tracker/wiki/Install-MacOS)
 - [FAQ](https://github.com/norihiro/obs-face-tracker/wiki/FAQ)
 
