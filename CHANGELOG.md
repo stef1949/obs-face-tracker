@@ -247,3 +247,4 @@ from 1 November 2025, after the upstream 0.9.1 release.
 - Installed the CUDA build into OBS Studio 32.1.0 and verified live face
   tracking, settings layout, cuDNN runtime preload, SCRFD model loading, and the
   ONNX Runtime 1.26 CUDA provider on GPU 0.
+ 
