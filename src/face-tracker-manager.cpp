@@ -809,7 +809,9 @@ void face_tracker_manager::get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "detector_interval_lost_ms", 250);
 	obs_data_set_default_int(settings, "tracker_interval_ms", 50);
 	obs_data_set_default_int(settings, "target_stick_ms", 1500);
+#if defined(HAVE_ONNXRUNTIME_CUDA) || defined(HAVE_YUNET)
 	bool cuda_available = false;
+#endif
 #if defined(HAVE_SCRFD) && defined(HAVE_ONNXRUNTIME_CUDA)
 	auto cuda_devices = face_detector_scrfd::get_cuda_devices();
 	cuda_available = !cuda_devices.empty();
