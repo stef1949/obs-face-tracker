@@ -22,6 +22,7 @@ option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer
 option(ENABLE_THREAD_SANITIZER "Enable ThreadSanitizer" OFF)
 set(CUDNN_RUNTIME_DIR "" CACHE PATH "Directory containing cuDNN runtime DLLs to package on Windows")
 set(CUDA_RUNTIME_DIRS "" CACHE STRING "Semicolon-separated CUDA runtime DLL directories to package on Windows")
+set(CUDA_RUNTIME_NOTICE_DIR "" CACHE PATH "Directory containing NVIDIA CUDA runtime licenses and manifest")
 set(ONNXRUNTIME_ROOT "" CACHE PATH "ONNX Runtime SDK or extracted NuGet package root")
 set(ONNXRUNTIME_RUNTIME_DIR "" CACHE PATH "Directory containing ONNX Runtime shared libraries to package")
 
@@ -195,6 +196,9 @@ if(ENABLE_YUNET OR ENABLE_SCRFD)
 	if(ENABLE_SCRFD)
 		target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_SCRFD=1)
 	endif()
+	if(ENABLE_ONNXRUNTIME_CUDA)
+		target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_ONNXRUNTIME_CUDA=1)
+	endif()
 endif()
 
 if(OS_WINDOWS)
@@ -257,7 +261,11 @@ if(OS_WINDOWS AND ENABLE_ONNXRUNTIME_CUDA AND CUDA_RUNTIME_DIRS)
 		file(GLOB CUDA_RUNTIME_DIR_DLLS CONFIGURE_DEPENDS
 			"${CUDA_RUNTIME_DIR}/cublas*.dll"
 			"${CUDA_RUNTIME_DIR}/cudart*.dll"
-			"${CUDA_RUNTIME_DIR}/cufft*.dll")
+			"${CUDA_RUNTIME_DIR}/cufft*.dll"
+			"${CUDA_RUNTIME_DIR}/curand*.dll"
+			"${CUDA_RUNTIME_DIR}/nvblas*.dll"
+			"${CUDA_RUNTIME_DIR}/nvJitLink*.dll"
+			"${CUDA_RUNTIME_DIR}/nvrtc*.dll")
 		list(APPEND CUDA_RUNTIME_DLLS ${CUDA_RUNTIME_DIR_DLLS})
 	endforeach()
 	list(REMOVE_DUPLICATES CUDA_RUNTIME_DLLS)
@@ -300,6 +308,24 @@ if(OS_WINDOWS AND (ENABLE_YUNET OR ENABLE_SCRFD) AND ONNXRUNTIME_RUNTIME_DIR)
 	install(
 		FILES ${ONNXRUNTIME_RUNTIME_DLLS}
 		DESTINATION $<CONFIG>/${OBS_PLUGIN_DESTINATION}
+		COMPONENT obs_rundir
+		EXCLUDE_FROM_ALL
+	)
+endif()
+
+if(OS_WINDOWS AND ENABLE_ONNXRUNTIME_CUDA)
+	if(NOT CUDA_RUNTIME_NOTICE_DIR OR NOT EXISTS "${CUDA_RUNTIME_NOTICE_DIR}/CUDA-RUNTIME-MANIFEST.txt")
+		message(FATAL_ERROR
+			"ENABLE_ONNXRUNTIME_CUDA requires CUDA_RUNTIME_NOTICE_DIR with CUDA-RUNTIME-MANIFEST.txt")
+	endif()
+	install(
+		DIRECTORY "${CUDA_RUNTIME_NOTICE_DIR}/"
+		DESTINATION ${OBS_DATA_DESTINATION}/obs-plugins/${CMAKE_PROJECT_NAME}/cuda-runtime-licenses
+		COMPONENT ${CMAKE_PROJECT_NAME}_Runtime
+	)
+	install(
+		DIRECTORY "${CUDA_RUNTIME_NOTICE_DIR}/"
+		DESTINATION $<CONFIG>/${OBS_DATA_DESTINATION}/obs-plugins/${CMAKE_PROJECT_NAME}/cuda-runtime-licenses
 		COMPONENT obs_rundir
 		EXCLUDE_FROM_ALL
 	)

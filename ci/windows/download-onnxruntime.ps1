@@ -31,6 +31,37 @@ if ($GpuCuda12) {
         $OutputDir = "$PSScriptRoot\..\..\.deps\onnxruntime"
     }
 }
+
+if ($GpuCuda12 -or $GpuCuda13) {
+    $runtimeRoot = Join-Path $OutputDir "onnxruntime-win-x64-gpu-$version"
+    $requiredFiles = @(
+        'include\onnxruntime_cxx_api.h'
+        'lib\onnxruntime.lib'
+        'lib\onnxruntime.dll'
+        'lib\onnxruntime_providers_shared.dll'
+        'lib\onnxruntime_providers_cuda.dll'
+    )
+} else {
+    $runtimeRoot = $OutputDir
+    $requiredFiles = @(
+        'build\native\include\onnxruntime_cxx_api.h'
+        'runtimes\win-x64\native\onnxruntime.lib'
+        'runtimes\win-x64\native\onnxruntime.dll'
+    )
+}
+
+$cachedRuntimeComplete = $true
+foreach ($requiredFile in $requiredFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot $requiredFile) -PathType Leaf)) {
+        $cachedRuntimeComplete = $false
+        break
+    }
+}
+if ($cachedRuntimeComplete) {
+    Write-Output (Resolve-Path -LiteralPath $runtimeRoot).Path
+    return
+}
+
 $package = Join-Path $env:TEMP $archiveName
 
 Invoke-WebRequest -UseBasicParsing -Uri $packageUrl -OutFile $package
@@ -41,12 +72,9 @@ if ($actualHash -ne $expectedHash) {
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 Expand-Archive -LiteralPath $package -DestinationPath $OutputDir -Force
-if ($GpuCuda12 -or $GpuCuda13) {
-    $runtimeRoot = Join-Path $OutputDir "onnxruntime-win-x64-gpu-$version"
-    if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'lib\onnxruntime_providers_cuda.dll'))) {
-        throw "The CUDA provider was not found in $runtimeRoot"
+foreach ($requiredFile in $requiredFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot $requiredFile) -PathType Leaf)) {
+        throw "The ONNX Runtime package is missing $requiredFile"
     }
-} else {
-    $runtimeRoot = $OutputDir
 }
 Write-Output (Resolve-Path -LiteralPath $runtimeRoot).Path
