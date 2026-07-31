@@ -696,9 +696,11 @@ void face_tracker_manager::get_properties(obs_properties_t *pp)
 		obs_properties_add_float(group, "upsize_t", obs_module_text("Top"), -0.4, 4.0, 0.2);
 		obs_properties_add_float(group, "upsize_b", obs_module_text("Bottom"), -0.4, 4.0, 0.2);
 		obs_properties_add_int(group, "detector_crop_l", obs_module_text("Crop left for detector"), 0, 1920, 1);
-		obs_properties_add_int(group, "detector_crop_r", obs_module_text("Crop right for detector"), 0, 1920, 1);
+		obs_properties_add_int(group, "detector_crop_r", obs_module_text("Crop right for detector"), 0, 1920,
+				       1);
 		obs_properties_add_int(group, "detector_crop_t", obs_module_text("Crop top for detector"), 0, 1080, 1);
-		obs_properties_add_int(group, "detector_crop_b", obs_module_text("Crop bottom for detector"), 0, 1080, 1);
+		obs_properties_add_int(group, "detector_crop_b", obs_module_text("Crop bottom for detector"), 0, 1080,
+				       1);
 		obs_properties_add_group(pp, "detection_area", obs_module_text("Group.DetectionArea"), OBS_GROUP_NORMAL,
 					 group);
 	}
@@ -721,8 +723,8 @@ void face_tracker_manager::get_properties(obs_properties_t *pp)
 	{
 		obs_properties_t *group = obs_properties_create();
 		obs_properties_add_bool(group, "landmark_detection", obs_module_text("Enable landmark detection"));
-		p = obs_properties_add_path(group, "landmark_detection_data", obs_module_text("Landmark detection data"),
-					    OBS_PATH_FILE,
+		p = obs_properties_add_path(group, "landmark_detection_data",
+					    obs_module_text("Landmark detection data"), OBS_PATH_FILE,
 					    "Data Files (*.dat);;"
 					    "All Files (*.*)",
 					    (data_path + "/" DIR_DLIB_LANDMARK).c_str());

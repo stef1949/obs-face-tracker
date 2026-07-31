@@ -188,8 +188,7 @@ void face_detector_yunet::detect_main()
 			if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
 				throw std::runtime_error("YuNet returned a non-float output");
 			auto shape = info.GetShape();
-			if (shape.size() != 3 || shape[0] != 1 || shape[1] != (int64_t)count ||
-			    shape[2] != channels)
+			if (shape.size() != 3 || shape[0] != 1 || shape[1] != (int64_t)count || shape[2] != channels)
 				throw std::runtime_error("YuNet output shape does not match the input dimensions");
 			return outputs[output].GetTensorData<float>();
 		};
