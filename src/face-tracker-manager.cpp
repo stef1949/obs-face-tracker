@@ -558,15 +558,13 @@ void face_tracker_manager::update(obs_data_t *settings)
 	const std::string packaged_scrfd_10g = obs_data_get_string(settings, "detector_scrfd_10g_model");
 	int scrfd_variant = (int)obs_data_get_int(settings, "scrfd_model_variant");
 	if (!obs_data_has_user_value(settings, "scrfd_model_variant") &&
-	    obs_data_has_user_value(settings, "detector_scrfd_model") &&
-	    legacy_scrfd_model != packaged_scrfd_2_5g) {
+	    obs_data_has_user_value(settings, "detector_scrfd_model") && legacy_scrfd_model != packaged_scrfd_2_5g) {
 		scrfd_variant = (int)scrfd_model_custom;
 		obs_data_set_int(settings, "scrfd_model_variant", scrfd_variant);
 	}
 	if (scrfd_variant < (int)scrfd_model_2_5g || scrfd_variant > (int)scrfd_model_custom)
 		scrfd_variant = (int)scrfd_model_2_5g;
-	bool activating_scrfd_10g = scrfd_model_variant != scrfd_model_10g &&
-				       scrfd_variant == (int)scrfd_model_10g;
+	bool activating_scrfd_10g = scrfd_model_variant != scrfd_model_10g && scrfd_variant == (int)scrfd_model_10g;
 	scrfd_model_variant = (enum scrfd_model_variant_e)scrfd_variant;
 	if (activating_scrfd_10g) {
 		blog(LOG_WARNING,
