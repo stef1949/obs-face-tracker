@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\download-utils.ps1"
 
 if (-not $OutputDir) {
     $OutputDir = "$PSScriptRoot\..\..\.deps\cuda12-runtime"
@@ -118,6 +119,7 @@ if ($cachedRuntimeComplete) {
     }
 }
 if ($cachedRuntimeComplete -and -not $ValidateMetadataOnly) {
+    Write-Host "[cache] Using the complete CUDA 12 runtime bundle from $outputRoot."
     Write-Output $outputRoot
     return
 }
@@ -139,6 +141,7 @@ try {
         $version = $package.Version
         $expectedHash = $package.SHA256
         $metadataUrl = "https://pypi.org/pypi/$name/$version/json"
+        Write-Host "[metadata] Resolving $name $version."
         $metadata = Invoke-RestMethod -UseBasicParsing -Uri $metadataUrl
         $asset = $metadata.urls |
             Where-Object { $_.filename -like '*-win_amd64.whl' } |
@@ -166,18 +169,26 @@ try {
             }
         }
         if ($packageComplete) {
+            Write-Host "[cache] $name $version is already materialized."
             $manifest += "$expectedHash  $($asset.filename)"
             continue
         }
 
         $wheelPath = Join-Path $workDir $asset.filename
-        Invoke-WebRequest -UseBasicParsing -Uri $asset.url -OutFile $wheelPath
+        Invoke-ResilientDownload `
+            -Uri $asset.url `
+            -Destination $wheelPath `
+            -DisplayName "$name $version" `
+            -ExpectedSize ([long]$asset.size)
+        Write-Host "[verify] Checking SHA-256 for $($asset.filename)."
         $actualHash = (Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash
         if ($actualHash -ne $expectedHash) {
+            Remove-Item -LiteralPath $wheelPath -Force -ErrorAction SilentlyContinue
             throw "$name checksum mismatch. Expected $expectedHash, got $actualHash"
         }
 
         $extractDir = Join-Path $workDir "$name-$version"
+        Write-Host "[extract] Extracting $name $version."
         [IO.Compression.ZipFile]::ExtractToDirectory($wheelPath, $extractDir)
 
         $nativeDlls = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter '*.dll' |
@@ -210,6 +221,9 @@ try {
         Copy-Item -LiteralPath $license.FullName -Destination $licenseDestination -Force
 
         $manifest += "$expectedHash  $($asset.filename)"
+        Remove-Item -LiteralPath $extractDir -Recurse -Force
+        Remove-Item -LiteralPath $wheelPath -Force
+        Write-Host "[extract] Materialized $name $version."
     }
 
     if ($ValidateMetadataOnly) {
@@ -232,6 +246,7 @@ try {
     }
     Set-Content -LiteralPath (Join-Path $outputLicenses 'CUDA-RUNTIME-MANIFEST.txt') `
         -Value $manifest -Encoding UTF8
+    Write-Host "[bundle] CUDA 12 runtime bundle is ready with $($requiredDllPatterns.Count) required DLLs."
 } finally {
     if (Test-Path -LiteralPath $workDir) {
         Remove-Item -LiteralPath $workDir -Recurse -Force
